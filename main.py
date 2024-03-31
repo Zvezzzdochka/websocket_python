@@ -5,31 +5,33 @@ import re  # Импорт модуля для работы с регулярны
 
 registered_users = {}  # Словарь для хранения зарегистрированных пользователей (логин: пароль)
 
-
-async def register_user(websocket, path):
+async def Websocket(websocket, path):
     while True:
         data = await websocket.recv()  # Получение данных от клиента
         user_data = json.loads(data)  # Преобразование полученных данных из JSON в объект Python
+        action = user_data.get("action")
+        match action:
+            case "register":
+                username = user_data.get('username')  # Получение логина пользователя из запроса
+                password = user_data.get('password')  # Получение пароля пользователя из запроса
 
-        username = user_data.get('username')  # Получение логина пользователя из запроса
-        password = user_data.get('password')  # Получение пароля пользователя из запроса
-
-        if username and password:  # Проверка наличия логина и пароля в запросе
-            # Проверка сложности пароля: если пароль < 8 символов, не содержит заглавных букв и цифр
-            if len(password) < 8 or not any(char.isupper() for char in password) or not any(
-                    char.isdigit() for char in password):
-                response = {'status': 'error', 'message': 'Пароль слишком простой'}
-            else:
-                # Регистрация пользователя, если пароль соответствует требованиям
-                registered_users[username] = password
-                response = {'status': 'success', 'message': 'Пользователь зарегистрирован успешно'}
-        else:
-            response = {'status': 'error', 'message': 'Отсутствуют логин и/или пароль в запросе'}
+                if username and password:  # Проверка наличия логина и пароля в запросе
+                    # Проверка сложности пароля: если пароль < 8 символов, не содержит заглавных букв и цифр
+                    if len(password) < 8 or not any(char.isupper() for char in password) or not any(
+                            char.isdigit() for char in password):
+                        response = {'status': 'error', 'message': 'Пароль слишком простой'}
+                    else:
+                        # Регистрация пользователя, если пароль соответствует требованиям
+                        registered_users[username] = password
+                        response = {'status': 'success', 'message': 'Пользователь зарегистрирован успешно'}
+                else:
+                    response = {'status': 'error', 'message': 'Отсутствуют логин и/или пароль в запросе'}
+            case "login":
 
         await websocket.send(json.dumps(response))  # Отправка ответа клиенту в формате JSON
 
 
-start_server = websockets.serve(register_user, '141.8.193.201', 8765)  # Запуск WebSocket сервера на localhost и порту 8765
+start_server = websockets.serve(register_user, '192.168.56.1', 8080)  # Запуск WebSocket сервера на localhost и порту 8765
 
 asyncio.get_event_loop().run_until_complete(start_server)  # Запуск сервера и ожидание его завершения
 asyncio.get_event_loop().run_forever()  # Бесконечный цикл для работы WebSocket сервера
