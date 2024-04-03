@@ -7,7 +7,7 @@ import re  # Импорт модуля для работы с регулярны
 async def register_user(user_data): # Регистрация пользователя
     connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable', host='141.8.193.201')
     try:
-        await connection.execute("INSERT INTO users(username, password) VALUES($1, $2)", user_data['username'], user_data['password'])
+        await connection.execute("INSERT INTO tagme.user (nickname, password) VALUES($1, $2)", user_data['username'], user_data['password'])
     finally:
         await connection.close()
 
@@ -22,18 +22,18 @@ async def Websocket(websocket, path):
                 password = user_data.get('password')  # Получение пароля пользователя из запроса
 
                 if username and password:  # Проверка наличия логина и пароля в запросе
-                    status = true
+                    status = True
                     error_list = []
                     # Проверка сложности пароля: если пароль < 8 символов, не содержит заглавных букв и цифр
                     if (len(password) < 8):
                         error_list.append('too short')
-                        status = false
+                        status = False
                     if (not any(char.isupper() for char in password)):
                         error_list.append('no capital')
-                        status = false
+                        status = False
                     if (not any(char.isdigit() for char in password)):
                         error_list.append('no digits')
-                        status = false
+                        status = False
                     if status:
                         await register_user(user_data)
                         message = "success"
@@ -42,7 +42,7 @@ async def Websocket(websocket, path):
                 else:
                     message = 'no login or password'
 
-        response = {'status': status * 'success' + (not status) * 'error', 'message': message}
+        response = {'status': 'success' if status else 'error', 'message': message}
         await websocket.send(json.dumps(response))  # Отправка ответа клиенту в формате JSON
 
 
