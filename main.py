@@ -4,10 +4,10 @@ import json
 import asyncpg  # Импорт библиотеки для работы с PostgreSQL
 import re  # Импорт модуля для работы с регулярными выражениями
 
-async def register_user(user_data): # Регистрация пользователя
+async def register_user(username, password): # Регистрация пользователя
     connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable', host='141.8.193.201')
     try:
-        await connection.execute("INSERT INTO tagme.user (nickname, password) VALUES($1, $2)", user_data['username'], user_data['password'])
+        await connection.execute('INSERT INTO tagme."user" (nickname, password) VALUES($1, $2)', username, username)
     finally:
         await connection.close()
 
@@ -35,7 +35,7 @@ async def Websocket(websocket, path):
                         error_list.append('no digits')
                         status = False
                     if status:
-                        await register_user(user_data)
+                        await register_user(username, password)
                         message = "success"
                     else:
                         message = 'input_error:' + ', '.join(error_list)
