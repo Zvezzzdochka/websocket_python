@@ -46,7 +46,7 @@ async def Websocket(websocket, path):
         await websocket.send(json.dumps(response))  # Отправка ответа клиенту в формате JSON
 
 
-start_server = websockets.serve(register_user, '192.168.56.1', 8080)  # Запуск WebSocket сервера на localhost и порту 8765
+start_server = websockets.serve(register_user, '141.8.193.201', 8765)  # Запуск WebSocket сервера на localhost и порту 8765
 
 asyncio.get_event_loop().run_until_complete(start_server)  # Запуск сервера и ожидание его завершения
 asyncio.get_event_loop().run_forever()  # Бесконечный цикл для работы WebSocket сервера
