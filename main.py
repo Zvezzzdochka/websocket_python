@@ -1,9 +1,15 @@
 import asyncio
 import websockets
 import json
+import asyncpg  # Импорт библиотеки для работы с PostgreSQL
 import re  # Импорт модуля для работы с регулярными выражениями
 
-registered_users = {}  # Словарь для хранения зарегистрированных пользователей (логин: пароль)
+async def register_user(user_data): # Регистрация пользователя
+    connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable', host='141.8.193.201')
+    try:
+        await connection.execute("INSERT INTO users(username, password) VALUES($1, $2)", user_data['username'], user_data['password'])
+    finally:
+        await connection.close()
 
 async def Websocket(websocket, path):
     while True:
@@ -16,18 +22,27 @@ async def Websocket(websocket, path):
                 password = user_data.get('password')  # Получение пароля пользователя из запроса
 
                 if username and password:  # Проверка наличия логина и пароля в запросе
+                    status = true
+                    error_list = []
                     # Проверка сложности пароля: если пароль < 8 символов, не содержит заглавных букв и цифр
-                    if len(password) < 8 or not any(char.isupper() for char in password) or not any(
-                            char.isdigit() for char in password):
-                        response = {'status': 'error', 'message': 'Пароль слишком простой'}
+                    if (len(password) < 8):
+                        error_list.append('too short')
+                        status = false
+                    if (not any(char.isupper() for char in password)):
+                        error_list.append('no capital')
+                        status = false
+                    if (not any(char.isdigit() for char in password)):
+                        error_list.append('no digits')
+                        status = false
+                    if status:
+                        await register_user(user_data)
+                        message = "success"
                     else:
-                        # Регистрация пользователя, если пароль соответствует требованиям
-                        registered_users[username] = password
-                        response = {'status': 'success', 'message': 'Пользователь зарегистрирован успешно'}
+                        message = 'input_error:' + ', '.join(error_list)
                 else:
-                    response = {'status': 'error', 'message': 'Отсутствуют логин и/или пароль в запросе'}
-            case "login":
+                    message = 'no login or password'
 
+        response = {'status': status * 'success' + (not status) * 'error', 'message': message}
         await websocket.send(json.dumps(response))  # Отправка ответа клиенту в формате JSON
 
 
