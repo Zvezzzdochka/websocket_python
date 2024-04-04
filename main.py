@@ -22,7 +22,22 @@ async def register_user(username, password): # Регистрация польз
         status = False
     finally:
         await connection.close()
-
+async def login_user(username, password): # Вход пользователя
+    global status, message
+    try:
+        connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable', host='141.8.193.201')
+        result = await connection.fetchval('SELECT CASE WHEN EXISTS (SELECT * FROM tagme."user" WHERE nickname = $1 AND password = $2) THEN \'TRUE\' ELSE \'FALSE\' END AS result', username, password)
+        if result == 'TRUE':
+            status = True
+            message = 'successful login'
+        else:
+            status = False
+            message = 'login failed'
+    except:
+        message = str(sys.exc_info()[1])
+        status = False
+    finally:
+        await connection.close()
 async def Websocket(websocket, path):
     global status, message
     while True:
@@ -61,6 +76,27 @@ async def Websocket(websocket, path):
                         message = 'input_error:' + ', '.join(error_list)
                 else:
                     message = 'no login or password'
+            case "login":
+                username = user_data.get('username')
+                password = user_data.get('password')
+                '''if (len(password) < 8):
+                    error_list.append('too short')
+                    status = False
+                if (len(username) > 14):
+                    error_list.append('login too long')
+                    status = False
+                if (len(password) > 19):
+                    error_list.append('password too long')
+                    status = False
+                if (not any(char.isupper() for char in password)):
+                    error_list.append('no capital')
+                    status = False
+                if (not any(char.isdigit() for char in password)):
+                    error_list.append('no digits')
+                    status = False
+                if status:
+                    await register_user(username, password)'''
+                await login_user(username, password)
 
         response = {'status': 'success' if status else 'error', 'message': message}
         await websocket.send(json.dumps(response))  # Отправка ответа клиенту в формате JSON
