@@ -4,16 +4,25 @@ import json
 import asyncpg  # Импорт библиотеки для работы с PostgreSQL
 import re  # Импорт модуля для работы с регулярными выражениями
 import sys
+import secrets
 status = True
 message = ''
+dictionary_token = {}
+async def generate_token(): # Генерация токена
+    return secrets.token_urlsafe(16)
 async def register_user(username, password): # Регистрация пользователя
     global status, message
     try:
         connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable', host='141.8.193.201')
         result = await connection.fetchval('SELECT CASE WHEN EXISTS (SELECT * FROM tagme."user" WHERE nickname = $1) THEN \'TRUE\' ELSE \'FALSE\' END AS result', username)
         if result == 'FALSE':
-            await connection.execute('INSERT INTO tagme."user" (nickname, password) VALUES($1, $2)', username, password)
+            token = await generate_token()
+            id_string = await connection.fetchval('INSERT INTO tagme."user" (nickname, password) VALUES($1, $2) returning id', username, password)
+            id = int(id_string)
+            dictionary_token[id] = token
+            dictionary_token[token] = id
             status = True
+            message = token
         else:
             status = False
             message = 'username already exists'
@@ -26,13 +35,19 @@ async def login_user(username, password): # Вход пользователя
     global status, message
     try:
         connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable', host='141.8.193.201')
-        result = await connection.fetchval('SELECT CASE WHEN EXISTS (SELECT * FROM tagme."user" WHERE nickname = $1 AND password = $2) THEN \'TRUE\' ELSE \'FALSE\' END AS result', username, password)
-        if result == 'TRUE':
-            status = True
-            message = 'successful login'
-        else:
+        result = await connection.fetchval('SELECT CASE WHEN EXISTS (SELECT * FROM tagme."user" WHERE nickname = $1 AND password = $2) THEN (select id from tagme."user" WHERE nickname = $1 AND password = $2)::varchar(10) ELSE \'FALSE\' END AS result', username, password)
+        if result == 'FALSE':
             status = False
-            message = 'login failed'
+            message = 'failed'
+        else:
+            token = await generate_token()
+            result_id = int(result)
+            if (result_id in dictionary_token.keys()):
+                dictionary_token.pop(dictionary_token[result_id])
+            dictionary_token[result_id] = token
+            dictionary_token[token] = result_id
+            status = True
+            message = token
     except:
         message = str(sys.exc_info()[1])
         status = False
@@ -70,6 +85,7 @@ async def Websocket(websocket, path):
                         error_list.append('no digits')
                         status = False
                     if status:
+
                         await register_user(username, password)
 
                     else:
@@ -79,23 +95,6 @@ async def Websocket(websocket, path):
             case "login":
                 username = user_data.get('username')
                 password = user_data.get('password')
-                '''if (len(password) < 8):
-                    error_list.append('too short')
-                    status = False
-                if (len(username) > 14):
-                    error_list.append('login too long')
-                    status = False
-                if (len(password) > 19):
-                    error_list.append('password too long')
-                    status = False
-                if (not any(char.isupper() for char in password)):
-                    error_list.append('no capital')
-                    status = False
-                if (not any(char.isdigit() for char in password)):
-                    error_list.append('no digits')
-                    status = False
-                if status:
-                    await register_user(username, password)'''
                 await login_user(username, password)
 
         response = {'status': 'success' if status else 'error', 'message': message}
