@@ -97,6 +97,8 @@ async def Websocket(websocket, path):
                 password = user_data.get('password')
                 await login_user(username, password)
 
+            case _:
+                message = "action mismatch"
         response = {'status': 'success' if status else 'error', 'message': message}
         await websocket.send(json.dumps(response))  # Отправка ответа клиенту в формате JSON
 
