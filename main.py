@@ -2,25 +2,38 @@ import asyncio
 import websockets
 import json
 import asyncpg  # Импорт библиотеки для работы с PostgreSQL
-import re  # Импорт модуля для работы с регулярными выражениями
 import sys
 import secrets
 status = True
 message = ''
-dictionary_token = {}
-async def generate_token(): # Генерация токена
-    return secrets.token_urlsafe(16)
+class TokenManager:
+
+    def __init__(self):
+        self.dictionary_token = {}
+    async def generate_token(self): # Генерация токена
+        return secrets.token_urlsafe(16)
+
+    async def write_dictionary(self, user_id, token): # Запись токена
+        self.dictionary_token[user_id] = token
+        self.dictionary_token[token] = user_id
+
+    async def read_dictionary(self, user_id): # Проверка наличия id (или токена)
+        return user_id in self.dictionary_token
+
+    async def pop_dictionary(self, user_id):
+        self.dictionary_token.pop(self.dictionary_token[user_id])
+
+tokenManager = TokenManager()
 async def register_user(username, password): # Регистрация пользователя
-    global status, message
+    global status, message, tokenManager
+    connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable', host='141.8.193.201')
     try:
-        connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable', host='141.8.193.201')
         result = await connection.fetchval('SELECT CASE WHEN EXISTS (SELECT * FROM tagme."user" WHERE nickname = $1) THEN \'TRUE\' ELSE \'FALSE\' END AS result', username)
         if result == 'FALSE':
-            token = await generate_token()
+            token = await tokenManager.generate_token()
             id_string = await connection.fetchval('INSERT INTO tagme."user" (nickname, password) VALUES($1, $2) returning id', username, password)
             id = int(id_string)
-            dictionary_token[id] = token
-            dictionary_token[token] = id
+            await tokenManager.write_dictionary(id, token)
             status = True
             message = token
         else:
@@ -32,20 +45,19 @@ async def register_user(username, password): # Регистрация польз
     finally:
         await connection.close()
 async def login_user(username, password): # Вход пользователя
-    global status, message
+    global status, message, tokenManager
+    connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable', host='141.8.193.201')
     try:
-        connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable', host='141.8.193.201')
         result = await connection.fetchval('SELECT CASE WHEN EXISTS (SELECT * FROM tagme."user" WHERE nickname = $1 AND password = $2) THEN (select id from tagme."user" WHERE nickname = $1 AND password = $2)::varchar(10) ELSE \'FALSE\' END AS result', username, password)
         if result == 'FALSE':
             status = False
             message = 'failed'
         else:
-            token = await generate_token()
+            token = await tokenManager.generate_token()
             result_id = int(result)
-            if (result_id in dictionary_token.keys()):
-                dictionary_token.pop(dictionary_token[result_id])
-            dictionary_token[result_id] = token
-            dictionary_token[token] = result_id
+            if await tokenManager.read_dictionary(result_id):
+                await tokenManager.pop_dictionary(result_id)
+            await tokenManager.write_dictionary(result_id, token)
             status = True
             message = token
     except:
@@ -53,8 +65,17 @@ async def login_user(username, password): # Вход пользователя
         status = False
     finally:
         await connection.close()
+async def login_token(token): #Вход по токену
+    global status, message, tokenManager
+    if await tokenManager.read_dictionary(token):
+        status = True
+        message = 'success'
+    else:
+        status = False
+        message = 'error'
+
 async def Websocket(websocket, path):
-    global status, message
+    global status, message, tokenManager
     while True:
         data = await websocket.recv()  # Получение данных от клиента
         user_data = json.loads(data)  # Преобразование полученных данных из JSON в объект Python
@@ -85,9 +106,7 @@ async def Websocket(websocket, path):
                         error_list.append('no digits')
                         status = False
                     if status:
-
                         await register_user(username, password)
-
                     else:
                         message = 'input_error:' + ', '.join(error_list)
                 else:
@@ -96,10 +115,14 @@ async def Websocket(websocket, path):
                 username = user_data.get('username')
                 password = user_data.get('password')
                 await login_user(username, password)
+            case "validate token":
+                token = user_data.get('token')
+                await login_token(token)
 
             case _:
+                status = False
                 message = "action mismatch"
-        response = {'status': 'success' if status else 'error', 'message': message}
+        response = {'action': action, 'status': 'success' if status else 'error', 'message': message}
         await websocket.send(json.dumps(response))  # Отправка ответа клиенту в формате JSON
 
 
