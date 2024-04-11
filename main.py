@@ -4,6 +4,7 @@ import json
 import asyncpg  # Импорт библиотеки для работы с PostgreSQL
 import sys
 import secrets
+import datetime
 status = True
 message = ''
 class TokenManager:
@@ -19,6 +20,9 @@ class TokenManager:
 
     async def read_dictionary(self, user_id): # Проверка наличия id (или токена)
         return user_id in self.dictionary_token
+
+    async def get_user_id(self, token):
+        return self.dictionary_token[token]
 
     async def pop_dictionary(self, user_id):
         self.dictionary_token.pop(self.dictionary_token[user_id])
@@ -74,6 +78,23 @@ async def login_token(token): #Вход по токену
         status = False
         message = 'error'
 
+async def send_location(token, latitude, longitude, accuracy, speed, timestamp): #Обновление location пользователя
+    global status, message, tokenManager
+    connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable', host='141.8.193.201')
+    try:
+        if await tokenManager.read_dictionary(token):
+            user_id = await tokenManager.get_user_id(token)
+            await connection.execute('INSERT INTO tagme.location (user_id, latitude, longitude, accuracy, speed, timestamp) VALUES($1, $2, $3, $4, $5, $6) ON CONFLICT (user_id) DO UPDATE SET latitude = $2, longitude = $3, accuracy = $4, speed = $5, timestamp = $6', user_id, latitude, longitude, accuracy, speed, timestamp)
+            status = True
+            message = 'success'
+        else:
+            status = False
+            message = 'token invalid'
+    except:
+        message = str(sys.exc_info()[1])
+        status = False
+    finally:
+        await connection.close()
 async def Websocket(websocket, path):
     global status, message, tokenManager
     while True:
@@ -115,13 +136,24 @@ async def Websocket(websocket, path):
                 username = user_data.get('username')
                 password = user_data.get('password')
                 await login_user(username, password)
+
             case "validate token":
                 token = user_data.get('token')
                 await login_token(token)
 
+            case "send location":
+                token = user_data.get('token')
+                latitude = float(user_data.get('latitude'))
+                longitude = float(user_data.get('longitude'))
+                accuracy = float(user_data.get('accuracy'))
+                speed = float(user_data.get('speed'))
+                timestamp = datetime.datetime.now()
+                await send_location(token, latitude, longitude, accuracy, speed, timestamp)
+
             case _:
                 status = False
                 message = "action mismatch"
+
         response = {'action': action, 'status': 'success' if status else 'error', 'message': message}
         await websocket.send(json.dumps(response))  # Отправка ответа клиенту в формате JSON
 
