@@ -95,6 +95,33 @@ async def send_location(token, latitude, longitude, accuracy, speed, timestamp):
         status = False
     finally:
         await connection.close()
+
+async def get_locations(token): # получение локации друзей
+    global status, message, tokenManager
+    connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable', host='141.8.193.201')
+    try:
+        if await tokenManager.read_dictionary(token):
+            user_id = await tokenManager.get_user_id(token)
+            records = await connection.fetch('''SELECT nickname, latitude, longitude, accuracy, speed, timestamp FROM tagme.location
+    LEFT JOIN tagme.user_link ON tagme.location.user_id = tagme.user_link.user2_id AND tagme.user_link.user1_id = $1
+    LEFT JOIN tagme."user" ON tagme.location.user_id = "user".id
+WHERE tagme.user_link.relation = \'friend\'''', user_id)
+            result = {"result": [{"nickname": record["nickname"],
+                                  "latitude": record["latitude"],
+                                  "longitude": record["longitude"],
+                                  "accuracy": record["accuracy"],
+                                  "speed": record["speed"],
+                                  "timestamp": record["timestamp"].isoformat()} for record in records]}
+            status = True
+            message = json.dumps((result))
+        else:
+            status = False
+            message = 'no location'
+    except:
+        message = str(sys.exc_info()[1])
+        status = False
+    finally:
+        await connection.close()
 async def Websocket(websocket, path):
     global status, message, tokenManager
     while True:
@@ -149,7 +176,9 @@ async def Websocket(websocket, path):
                 speed = float(user_data.get('speed'))
                 timestamp = datetime.datetime.now()
                 await send_location(token, latitude, longitude, accuracy, speed, timestamp)
-
+            case "get locations":
+                token = user_data.get('token')
+                await get_locations(token)
             case _:
                 status = False
                 message = "action mismatch"
