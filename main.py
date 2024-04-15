@@ -122,6 +122,93 @@ WHERE tagme.user_link.relation = \'friend\'''', user_id)
         status = False
     finally:
         await connection.close()
+
+async def add_friend(token, nickname): #добавление в друзья
+    global status, message, tokenManager
+    connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
+                                       host='141.8.193.201')
+    try:
+        if await tokenManager.read_dictionary(token):
+            user_id = await tokenManager.get_user_id(token)
+            await connection.execute('''INSERT INTO tagme.user_link (user1_id, user2_id,relation)
+VALUES ($1,(SELECT id from tagme."user" where nickname = $2), 'incoming'), ((SELECT id from tagme."user" where nickname = $2), $1, 'outgoing')''', user_id, nickname)
+            status = True
+            message = 'success'
+        else:
+            status = False
+            message = 'failed add friend'
+    except:
+        message = str(sys.exc_info()[1])
+        status = False
+    finally:
+        await connection.close()
+
+async def accept_friend(token, nickname): # принятие в друзья
+    global status, message, tokenManager
+    connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
+                                       host='141.8.193.201')
+    try:
+        if await tokenManager.read_dictionary(token):
+            user_id = await tokenManager.get_user_id(token)
+            await connection.execute('''UPDATE tagme.user_link
+   set relation = 'friend'
+   where (relation = 'incoming' OR relation = 'outgoing') AND
+       ((user1_id = $1 AND user2_id = (select id from tagme."user" where nickname = $2)) OR (user1_id = (select id from tagme."user" where nickname = $2) AND user2_id = $1))''', user_id, nickname)
+            await connection.execute('''INSERT INTO tagme.conversation (user1_id, user2_id)
+   SELECT
+       $1, (select id from tagme."user" where nickname = $2)
+   WHERE NOT EXISTS (
+       SELECT 1 FROM tagme.conversation WHERE ((user1_id = $1 AND user2_id = (select id from tagme."user" where nickname = $2)) OR (user1_id = (select id from tagme."user" where nickname = $2) AND user2_id = $1)))''', user_id, nickname)
+            status = True
+            message = 'success'
+        else:
+            status = False
+            message = 'failed accept friend'
+    except:
+        message = str(sys.exc_info()[1])
+        status = False
+    finally:
+        await connection.close()
+
+async def reject_friend(token, nickname): # Отклонение запроса в друзья
+    global status, message, tokenManager
+    connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
+                                       host='141.8.193.201')
+    try:
+        if await tokenManager.read_dictionary(token):
+            user_id = await tokenManager.get_user_id(token)
+            await connection.execute('''UPDATE tagme.user_link 
+SET relation = 'default'
+WHERE (user1_id = $1 and user2_id = (select id from tagme."user" where nickname = $2)) or (user1_id = (select id from tagme."user" where nickname = $2) and user2_id = $1)''', user_id, nickname)
+            status = True
+            message = 'success'
+        else:
+            status = False
+            message = 'failed reject friend'
+    except:
+        message = str(sys.exc_info()[1])
+        status = False
+    finally:
+        await connection.close()
+
+async def loading_chat(token):
+    global status, message, tokenManager
+    connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
+                                       host='141.8.193.201')
+    try:
+        if await tokenManager.read_dictionary(token):
+            user_id = await tokenManager.get_user_id(token)
+            result = await connection.fetchval('SELECT id FROM tagme.conversation where (user1_id = $1)', user_id)
+            status = True
+            message = result
+        else:
+            status = False
+            message = 'failed loading chat'
+    except:
+        message = str(sys.exc_info()[1])
+        status = False
+    finally:
+        await connection.close()
 async def Websocket(websocket, path):
     global status, message, tokenManager
     while True:
@@ -179,6 +266,21 @@ async def Websocket(websocket, path):
             case "get locations":
                 token = user_data.get('token')
                 await get_locations(token)
+            case "add friend":
+                token = user_data.get('token')
+                nickname = user_data.get('nickname')
+                await add_friend(token, nickname)
+            case "accept friend":
+                token = user_data.get('token')
+                nickname = user_data.get('nickname')
+                await accept_friend(token, nickname)
+            case "reject friend":
+                token = user_data.get('token')
+                nickname = user_data.get('nickname')
+                await reject_friend(token, nickname)
+            case "loading chat":
+                token = user_data.get('token')
+                await loading_chat(token)
             case _:
                 status = False
                 message = "action mismatch"
