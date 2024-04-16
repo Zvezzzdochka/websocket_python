@@ -102,11 +102,11 @@ async def get_locations(token): # получение локации друзей
     try:
         if await tokenManager.read_dictionary(token):
             user_id = await tokenManager.get_user_id(token)
-            records = await connection.fetch('''SELECT nickname, latitude, longitude, accuracy, speed, timestamp FROM tagme.location
+            records = await connection.fetch('''SELECT "user".id, nickname, latitude, longitude, accuracy, speed, timestamp FROM tagme.location
     LEFT JOIN tagme.user_link ON tagme.location.user_id = tagme.user_link.user2_id AND tagme.user_link.user1_id = $1
     LEFT JOIN tagme."user" ON tagme.location.user_id = "user".id
 WHERE tagme.user_link.relation = \'friend\'''', user_id)
-            result = {"result": [{"nickname": record["nickname"],
+            result = {"result": [{"user_id": record["id"], "nickname": record["nickname"],
                                   "latitude": record["latitude"],
                                   "longitude": record["longitude"],
                                   "accuracy": record["accuracy"],
@@ -130,10 +130,18 @@ async def add_friend(token, nickname): #добавление в друзья
     try:
         if await tokenManager.read_dictionary(token):
             user_id = await tokenManager.get_user_id(token)
-            await connection.execute('''INSERT INTO tagme.user_link (user1_id, user2_id,relation)
-VALUES ($1,(SELECT id from tagme."user" where nickname = $2), 'incoming'), ((SELECT id from tagme."user" where nickname = $2), $1, 'outgoing')''', user_id, nickname)
-            status = True
-            message = 'success'
+            result = await connection.fetchval('''SELECT CASE
+           WHEN EXISTS (SELECT * FROM tagme."user" WHERE nickname = $1) THEN 'TRUE'
+           ELSE 'FALSE'
+           END AS result''', nickname)
+            if (result == 'TRUE'):
+                await connection.execute('''INSERT INTO tagme.user_link (user1_id, user2_id,relation)
+    VALUES ($1,(SELECT id from tagme."user" where nickname = $2), 'outgoing'), ((SELECT id from tagme."user" where nickname = $2), $1, 'outgoing')''', user_id, nickname)
+                status = True
+                message = 'success'
+            else:
+                status = False
+                message = 'no user'
         else:
             status = False
             message = 'failed add friend'
