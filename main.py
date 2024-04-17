@@ -140,14 +140,14 @@ async def add_friend(token, nickname): #Отправка заявки в дру�
                                                        AND user2_id = $1
                                                        AND relation = 'blocked') THEN 'TRUE'
            ELSE 'FALSE'
-           END AS result''', nickname)
+           END AS result''', user_id, nickname)
 
             resultOnFriend = await connection.fetchval('''SELECT CASE
            WHEN EXISTS (SELECT * FROM tagme.user_link WHERE user1_id = (SELECT id from tagme."user" where nickname = $2)
                                                        AND user2_id = $1
                                                        AND relation = 'friend') THEN 'TRUE'
            ELSE 'FALSE'
-           END AS result''', nickname)
+           END AS result''', user_id, nickname)
             if (result == 'TRUE'):
                 if (resultOnBlocked == 'FALSE'):
                     if (resultOnFriend == 'FALSE'):
@@ -183,49 +183,29 @@ async def add_friend(token, nickname): #Отправка заявки в дру�
         status = False
     finally:
         await connection.close()
-async def loading_friends(token):   #Заргузка спсика друзей
-    global status, message, tokenManager
-    connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
-                                       host='141.8.193.201')
-    try:
-        if await tokenManager.read_dictionary(token):
-            user_id = await tokenManager.get_user_id(token)
-            result = await connection.fetchval('''SELECT "user".id, nickname, picture_id, picture  FROM tagme.user_link
-      INNER JOIN tagme."user" ON tagme.user_link.user2_id = tagme."user".id AND tagme.user_link.user1_id = $1
-      LEFT JOIN tagme.picture ON tagme.picture.id = picture_id
-WHERE tagme.user_link.relation = \'friend\'''', user_id)
-            status = True
-            message = result
-        else:
-            status = False
-            message = 'failed loading chats'
-    except:
-        message = str(sys.exc_info()[1])
-        status = False
-    finally:
-        await connection.close()
-async def finding_friend(token, nickname):   #Поиск друга
-    global status, message, tokenManager
-    connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
-                                       host='141.8.193.201')
-    try:
-        if await tokenManager.read_dictionary(token):
-            user_id = await tokenManager.get_user_id(token)
-            result = await connection.fetchval('''SELECT "user".id, nickname, picture_id, picture  FROM tagme.user_link
-      INNER JOIN tagme."user" ON tagme.user_link.user2_id = tagme."user".id AND tagme.user_link.user1_id = $1
-      LEFT JOIN tagme.picture ON tagme.picture.id = picture_id
-WHERE tagme.user_link.relation = \'friend\'''', user_id)
-            status = True
-            message = result
-        else:
-            status = False
-            message = 'failed loading chats'
-    except:
-        message = str(sys.exc_info()[1])
-        status = False
-    finally:
-        await connection.close()
-async def cancel_outgoing_request(token, nickname): # Отменить исходящую заявку
+
+# async def loading_pfp_friends(token):   #Загрузка картинка друзей
+#     global status, message, tokenManager
+#     connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
+#                                        host='141.8.193.201')
+#     try:
+#         if await tokenManager.read_dictionary(token):
+#             user_id = await tokenManager.get_user_id(token)
+#             result = await connection.fetchval('''SELECT "user".id, nickname, picture_id, picture  FROM tagme.user_link
+#       INNER JOIN tagme."user" ON tagme.user_link.user2_id = tagme."user".id AND tagme.user_link.user1_id = $1
+#       LEFT JOIN tagme.picture ON tagme.picture.id = picture_id
+# WHERE tagme.user_link.relation = \'friend\'''', user_id)
+#             status = True
+#             message = result
+#         else:
+#             status = False
+#             message = 'failed loading chats'
+#     except:
+#         message = str(sys.exc_info()[1])
+#         status = False
+#     finally:
+#         await connection.close()
+async def cancel_outgoing_request(token, user2_id): # Отменить исходящую заявку
     global status, message, tokenManager
     connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
                                        host='141.8.193.201')
@@ -235,12 +215,12 @@ async def cancel_outgoing_request(token, nickname): # Отменить исхо�
             await connection.execute('''UPDATE tagme.user_link
                set relation = 'default'
                where (relation = 'incoming' OR relation = 'outgoing') AND
-                   ((user1_id = $1 AND user2_id = $2) OR (user1_id = $2 AND user2_id = $1))''', user_id, nickname)
+                   ((user1_id = $1 AND user2_id = $2) OR (user1_id = $2 AND user2_id = $1))''', user_id, user2_id)
             status = True
             message = 'success'
         else:
             status = False
-            message = 'failed cancel outgoing request'
+            message = 'token invalid'
     except:
         message = str(sys.exc_info()[1])
         status = False
@@ -257,7 +237,7 @@ async def accept_friend(token, nickname): # принятие в друзья -- 
             await connection.execute('''UPDATE tagme.user_link
    set relation = 'friend', date_linked = $3
    where (relation = 'incoming' OR relation = 'outgoing') AND
-       ((user1_id = $1 AND user2_id = $2) OR (user1_id = $2 AND user2_id = $1))''', user_id, nickname)
+       ((user1_id = $1 AND user2_id = $2) OR (user1_id = $2 AND user2_id = $1))''', user_id, nickname, datetime.datetime.now())
             await connection.execute('''INSERT INTO tagme.conversation (user1_id, user2_id)
    SELECT
        $1, $2
@@ -267,7 +247,7 @@ async def accept_friend(token, nickname): # принятие в друзья -- 
             message = 'success'
         else:
             status = False
-            message = 'failed accept friend'
+            message = 'token invalid'
     except:
         message = str(sys.exc_info()[1])
         status = False
@@ -289,7 +269,7 @@ WHERE (user1_id = $1 and user2_id = $2) or (user1_id = $2 and user2_id = $1)''',
             message = 'success'
         else:
             status = False
-            message = 'failed reject friend'
+            message = 'token invalid'
     except:
         message = str(sys.exc_info()[1])
         status = False
@@ -310,7 +290,7 @@ WHERE tagme.user_link.relation = 'incoming' OR tagme.user_link.relation = \'outg
             message = result
         else:
             status = False
-            message = 'failed loading friend_requests'
+            message = 'token invalid'
     except:
         message = str(sys.exc_info()[1])
         status = False
@@ -328,7 +308,7 @@ async def loading_chats(token):
             message = result
         else:
             status = False
-            message = 'failed loading chats'
+            message = 'token invalid'
     except:
         message = str(sys.exc_info()[1])
         status = False
@@ -405,7 +385,7 @@ async def Websocket(websocket, path):
                 await reject_friend(token, nickname)
             case "loading chat":
                 token = user_data.get('token')
-                await loading_chat(token)
+                await loading_chats(token)
             case _:
                 status = False
                 message = "action mismatch"
