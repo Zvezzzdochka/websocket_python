@@ -151,19 +151,7 @@ async def add_friend(token, nickname): #Отправка заявки в дру�
             if (result == 'TRUE'):
                 if (resultOnBlocked == 'FALSE'):
                     if (resultOnFriend == 'FALSE'):
-                        await connection.execute('''DO
-                            $do$
-                                BEGIN
-                                    IF NOT EXISTS (SELECT user1_id, user2_id FROM tagme.user_link WHERE user1_id = $1 AND user2_id = (SELECT id from tagme."user" where nickname = $2)) THEN
-                                        INSERT INTO tagme.user_link (user1_id, user2_id,relation)
-                                        VALUES ($1,(SELECT id from tagme."user" where nickname = $2), 'outgoing'),
-                                               ((SELECT id from tagme."user" where nickname = $2), $1, 'incoming');
-                                    ELSE
-                                        UPDATE tagme.user_link set relation = 'outgoing' where user1_id = $1 and user2_id = (SELECT id from tagme."user" where nickname = $2);
-                                        UPDATE tagme.user_link set relation = 'incoming' where user1_id = (SELECT id from tagme."user" where nickname = $2) and user2_id = $1;
-                                    END IF;
-                                END
-                            $do$''', user_id, nickname)
+                        await connection.execute("CALL add_or_update_user_link($1, $2)", str(user_id), nickname)
                         status = True
                         message = 'success'
                     else:
@@ -227,7 +215,7 @@ async def cancel_outgoing_request(token, user2_id): # Отменить исхо�
     finally:
         await connection.close()
 
-async def accept_friend(token, user2_id): # принятие в друзья -- переделано: nickname - это user_id второго польз.
+async def accept_request(token, user2_id): # принятие в друзья -- переделано: nickname - это user_id второго польз.
     global status, message, tokenManager
     connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
                                        host='141.8.193.201')
@@ -237,7 +225,7 @@ async def accept_friend(token, user2_id): # принятие в друзья -- 
             await connection.execute('''UPDATE tagme.user_link
    set relation = 'friend', date_linked = $3
    where (relation = 'incoming' OR relation = 'outgoing') AND
-       ((user1_id = $1 AND user2_id = $2) OR (user1_id = $2 AND user2_id = $1))''', user_id, user2_id, datetime.datetime.now())
+       ((user1_id = $1 AND user2_id = $2) OR (user1_id = $2 AND user2_id = $1))''', user_id, user2_id, datetime.date.today())
             await connection.execute('''INSERT INTO tagme.conversation (user1_id, user2_id)
    SELECT
        $1, $2
@@ -255,7 +243,7 @@ async def accept_friend(token, user2_id): # принятие в друзья -- 
         await connection.close()
 
 #Вообще эту функцию можно использовать еще как удаление из друзей!
-async def reject_friend(token, user2_id): # Отклонение запроса в друзья -- переделано: nickname - это user_id второго польз.
+async def deny_request(token, user2_id): # Отклонение запроса в друзья -- переделано: nickname - это user_id второго польз.
     global status, message, tokenManager
     connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
                                        host='141.8.193.201')
@@ -276,7 +264,7 @@ WHERE (user1_id = $1 and user2_id = $2) or (user1_id = $2 and user2_id = $1)''',
     finally:
         await connection.close()
 
-async def loading_friend_requests(token): # Загрузка списка входящих и исходящих заявок в друзья
+async def load_friend_requests(token): # Загрузка списка входящих и исходящих заявок в друзья
     global status, message, tokenManager
     connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
                                        host='141.8.193.201')
@@ -285,7 +273,7 @@ async def loading_friend_requests(token): # Загрузка списка вхо
             user_id = await tokenManager.get_user_id(token)
             records = await connection.fetch('''SELECT "user".id, nickname, relation FROM tagme."user"
     LEFT JOIN tagme.user_link ON tagme."user".id = tagme.user_link.user2_id AND tagme.user_link.user1_id = $1
-WHERE tagme.user_link.relation = 'incoming' OR tagme.user_link.relation = \'outgoing\'''', user_id)
+WHERE tagme.user_link.relation = 'incoming' OR tagme.user_link.relation = 'outgoing' order by nickname asc''', user_id)
             result = {"result": [{"user_id": record["id"], "nickname": record["nickname"],
                                   "relation": record["relation"]} for record in records]}
             status = True
@@ -298,7 +286,7 @@ WHERE tagme.user_link.relation = 'incoming' OR tagme.user_link.relation = \'outg
         status = False
     finally:
         await connection.close()
-async def loading_chats(token):    #Загрузка чатов
+async def load_chats(token):    #Загрузка чатов
     global status, message, tokenManager
     connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
                                        host='141.8.193.201')
@@ -317,7 +305,7 @@ async def loading_chats(token):    #Загрузка чатов
     finally:
         await connection.close()
 
-async def loading_messages(token, last_msg_id):    #Загрузка сообщений в чате
+async def load_messages(token, last_msg_id):    #Загрузка сообщений в чате
     global status, message, tokenManager
     connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
                                        host='141.8.193.201')
@@ -325,6 +313,57 @@ async def loading_messages(token, last_msg_id):    #Загрузка сообщ�
         if await tokenManager.read_dictionary(token):
             user_id = await tokenManager.get_user_id(token)
             result = await connection.fetchval('select id, author_id ,text, timestamp from tagme.message where (conversation_id = $1 AND id < $2) LIMIT 20', user_id, last_msg_id)
+            status = True
+            message = result
+        else:
+            status = False
+            message = 'token invalid'
+    except:
+        message = str(sys.exc_info()[1])
+        status = False
+    finally:
+        await connection.close()
+
+async  def create_geo_story(token, privacy, picture_id, views, latitude, longitude):
+    global status, message, tokenManager
+    connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
+                                       host='141.8.193.201')
+    try:
+        if await tokenManager.read_dictionary(token):
+            user_id = await tokenManager.get_user_id(token)
+            records = await connection.fetch(
+                '''INSERT INTO tagme.geo_story (creator_id, privacy, picture_id, views, latitude, longitude, timestamp)
+VALUES($1, $2, $3, $4, $5, $6, $7);''', user_id, privacy, picture_id, views, latitude, longitude, datetime.datetime.now())
+            result = {"result": [{"creator_id": record["creator_id"], "privacy": record["privacy"],
+                                  "picture_id": record["picture_id"], "views": record["views"],
+                                  "latitude": record["latitude"], "longitude": record["longitude"],
+                                  "timestamp": record["timestamp"]} for record in records]}
+            status = True
+            message = result
+        else:
+            status = False
+            message = 'token invalid'
+    except:
+        message = str(sys.exc_info()[1])
+        status = False
+    finally:
+        await connection.close()
+async  def load_geo_story(token, geo_story_id):
+    global status, message, tokenManager
+    connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
+                                       host='141.8.193.201')
+    try:
+        if await tokenManager.read_dictionary(token):
+            user_id = await tokenManager.get_user_id(token)
+            records = await connection.fetch(
+                '''SELECT id, creator_id, privacy, picture_id, views, latitude, longitude, timestamp FROM tagme.geo_story where id = $1''', geo_story_id)
+            result = {"result": [{"geo_story_id": record["id"], "creator_id": record["creator_id"],
+                                  "privacy": record["privacy"], "picture_id": record["picture_id,"],
+                                  "views": record["views"], "latitude": record["latitude"], "longitude": record["longitude"],
+                                  "timestamp": record["timestamp"]} for record in records]}
+            await connection.execute('''UPDATE tagme.geo_story
+            set views = views + 1 
+            where id = $1''', geo_story_id)
             status = True
             message = result
         else:
@@ -396,17 +435,28 @@ async def Websocket(websocket, path):
                 token = user_data.get('token')
                 nickname = user_data.get('nickname')
                 await add_friend(token, nickname)
-            case "accept friend":
+            case "accept request":
                 token = user_data.get('token')
-                nickname = user_data.get('nickname')
-                await accept_friend(token, nickname)
-            case "reject friend":
+                user2_id = user_data.get('user2_id')
+                await accept_request(token, user2_id)
+            case "cancel request":
                 token = user_data.get('token')
-                nickname = user_data.get('nickname')
-                await reject_friend(token, nickname)
+                user2_id = user_data.get('user2_id')
+                await cancel_outgoing_request(token, user2_id)
+            case "deny request":
+                token = user_data.get('token')
+                user2_id = user_data.get('user2_id')
+                await deny_request(token, user2_id)
             case "loading chat":
                 token = user_data.get('token')
-                await loading_chats(token)
+                await load_chats(token)
+            case "get friend requests":
+                token = user_data.get('token')
+                await load_friend_requests(token)
+            case "loading messages":
+                token = user_data.get('token')
+                message_id = user_data.get('msg_id')
+                await load_messages(token, message_id)
             case _:
                 status = False
                 message = "action mismatch"
