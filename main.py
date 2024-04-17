@@ -32,7 +32,7 @@ async def register_user(username, password): # Регистрация польз
     global status, message, tokenManager
     connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable', host='141.8.193.201')
     try:
-        result = await connection.fetchval('SELECT CASE WHEN EXISTS (SELECT * FROM tagme."user" WHERE nickname = $1) THEN \'TRUE\' ELSE \'FALSE\' END AS result', username)
+        result = await connection.fetchval('''SELECT CASE WHEN EXISTS (SELECT * FROM tagme."user" WHERE nickname = $1) THEN 'TRUE' ELSE 'FALSE' END AS result''', username)
         if result == 'FALSE':
             token = await tokenManager.generate_token()
             id_string = await connection.fetchval('INSERT INTO tagme."user" (nickname, password) VALUES($1, $2) returning id', username, password)
@@ -52,7 +52,7 @@ async def login_user(username, password): # Вход пользователя
     global status, message, tokenManager
     connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable', host='141.8.193.201')
     try:
-        result = await connection.fetchval('SELECT CASE WHEN EXISTS (SELECT * FROM tagme."user" WHERE nickname = $1 AND password = $2) THEN (select id from tagme."user" WHERE nickname = $1 AND password = $2)::varchar(10) ELSE \'FALSE\' END AS result', username, password)
+        result = await connection.fetchval('''SELECT CASE WHEN EXISTS (SELECT * FROM tagme."user" WHERE nickname = $1 AND password = $2) THEN (select id from tagme."user" WHERE nickname = $1 AND password = $2)::varchar(10) ELSE 'FALSE' END AS result''', username, password)
         if result == 'FALSE':
             status = False
             message = 'failed'
@@ -123,7 +123,7 @@ WHERE tagme.user_link.relation = \'friend\'''', user_id)
     finally:
         await connection.close()
 
-async def add_friend(token, nickname): #добавление в друзья
+async def add_friend(token, nickname): #Отправка заявки в друзья
     global status, message, tokenManager
     connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
                                        host='141.8.193.201')
@@ -134,24 +134,98 @@ async def add_friend(token, nickname): #добавление в друзья
            WHEN EXISTS (SELECT * FROM tagme."user" WHERE nickname = $1) THEN 'TRUE'
            ELSE 'FALSE'
            END AS result''', nickname)
+
+            resultOnBlocked = await connection.fetchval('''SELECT CASE
+           WHEN EXISTS (SELECT * FROM tagme.user_link WHERE user1_id = (SELECT id from tagme."user" where nickname = $2)
+                                                       AND user2_id = $1
+                                                       AND relation = 'blocked') THEN 'TRUE'
+           ELSE 'FALSE'
+           END AS result''', nickname)
+
+            resultOnFriend = await connection.fetchval('''SELECT CASE
+           WHEN EXISTS (SELECT * FROM tagme.user_link WHERE user1_id = (SELECT id from tagme."user" where nickname = $2)
+                                                       AND user2_id = $1
+                                                       AND relation = 'friend') THEN 'TRUE'
+           ELSE 'FALSE'
+           END AS result''', nickname)
             if (result == 'TRUE'):
-                await connection.execute('''INSERT INTO tagme.user_link (user1_id, user2_id,relation)
-    VALUES ($1,(SELECT id from tagme."user" where nickname = $2), 'outgoing'), ((SELECT id from tagme."user" where nickname = $2), $1, 'outgoing')''', user_id, nickname)
-                status = True
-                message = 'success'
+                if (resultOnBlocked == 'FALSE'):
+                    if (resultOnFriend == 'FALSE'):
+                        await connection.execute('''DO
+                            $do$
+                                BEGIN
+                                    IF NOT EXISTS (SELECT user1_id, user2_id FROM tagme.user_link WHERE user1_id = $1 AND user2_id = (SELECT id from tagme."user" where nickname = $2)) THEN
+                                        INSERT INTO tagme.user_link (user1_id, user2_id,relation)
+                                        VALUES ($1,(SELECT id from tagme."user" where nickname = $2), 'outgoing'),
+                                               ((SELECT id from tagme."user" where nickname = $2), $1, 'incoming');
+                                    ELSE
+                                        UPDATE tagme.user_link set relation = 'outgoing' where user1_id = $1 and user2_id = (SELECT id from tagme."user" where nickname = $2);
+                                        UPDATE tagme.user_link set relation = 'incoming' where user1_id = (SELECT id from tagme."user" where nickname = $2) and user2_id = $1;
+                                    END IF;
+                                END
+                            $do$''', user_id, nickname)
+                        status = True
+                        message = 'success'
+                    else:
+                        status = False
+                        message = 'user is already a friend'
+                else:
+                    status = False
+                    message = 'user was blocked by this user'
             else:
                 status = False
                 message = 'no user'
         else:
             status = False
-            message = 'failed add friend'
+            message = 'token invalid'
     except:
         message = str(sys.exc_info()[1])
         status = False
     finally:
         await connection.close()
-
-async def accept_friend(token, nickname): # принятие в друзья
+async def loading_friends(token):   #Заргузка спсика друзей
+    global status, message, tokenManager
+    connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
+                                       host='141.8.193.201')
+    try:
+        if await tokenManager.read_dictionary(token):
+            user_id = await tokenManager.get_user_id(token)
+            result = await connection.fetchval('''SELECT "user".id, nickname, picture_id, picture  FROM tagme.user_link
+      INNER JOIN tagme."user" ON tagme.user_link.user2_id = tagme."user".id AND tagme.user_link.user1_id = $1
+      LEFT JOIN tagme.picture ON tagme.picture.id = picture_id
+WHERE tagme.user_link.relation = \'friend\'''', user_id)
+            status = True
+            message = result
+        else:
+            status = False
+            message = 'failed loading chats'
+    except:
+        message = str(sys.exc_info()[1])
+        status = False
+    finally:
+        await connection.close()
+async def finding_friend(token, nickname):   #Поиск друга
+    global status, message, tokenManager
+    connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
+                                       host='141.8.193.201')
+    try:
+        if await tokenManager.read_dictionary(token):
+            user_id = await tokenManager.get_user_id(token)
+            result = await connection.fetchval('''SELECT "user".id, nickname, picture_id, picture  FROM tagme.user_link
+      INNER JOIN tagme."user" ON tagme.user_link.user2_id = tagme."user".id AND tagme.user_link.user1_id = $1
+      LEFT JOIN tagme.picture ON tagme.picture.id = picture_id
+WHERE tagme.user_link.relation = \'friend\'''', user_id)
+            status = True
+            message = result
+        else:
+            status = False
+            message = 'failed loading chats'
+    except:
+        message = str(sys.exc_info()[1])
+        status = False
+    finally:
+        await connection.close()
+async def cancel_outgoing_request(token, nickname): # Отменить исходящую заявку
     global status, message, tokenManager
     connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
                                        host='141.8.193.201')
@@ -159,14 +233,36 @@ async def accept_friend(token, nickname): # принятие в друзья
         if await tokenManager.read_dictionary(token):
             user_id = await tokenManager.get_user_id(token)
             await connection.execute('''UPDATE tagme.user_link
-   set relation = 'friend'
+               set relation = 'default'
+               where (relation = 'incoming' OR relation = 'outgoing') AND
+                   ((user1_id = $1 AND user2_id = $2) OR (user1_id = $2 AND user2_id = $1))''', user_id, nickname)
+            status = True
+            message = 'success'
+        else:
+            status = False
+            message = 'failed cancel outgoing request'
+    except:
+        message = str(sys.exc_info()[1])
+        status = False
+    finally:
+        await connection.close()
+
+async def accept_friend(token, nickname): # принятие в друзья -- переделано: nickname - это user_id второго польз.
+    global status, message, tokenManager
+    connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
+                                       host='141.8.193.201')
+    try:
+        if await tokenManager.read_dictionary(token):
+            user_id = await tokenManager.get_user_id(token)
+            await connection.execute('''UPDATE tagme.user_link
+   set relation = 'friend', date_linked = $3
    where (relation = 'incoming' OR relation = 'outgoing') AND
-       ((user1_id = $1 AND user2_id = (select id from tagme."user" where nickname = $2)) OR (user1_id = (select id from tagme."user" where nickname = $2) AND user2_id = $1))''', user_id, nickname)
+       ((user1_id = $1 AND user2_id = $2) OR (user1_id = $2 AND user2_id = $1))''', user_id, nickname)
             await connection.execute('''INSERT INTO tagme.conversation (user1_id, user2_id)
    SELECT
-       $1, (select id from tagme."user" where nickname = $2)
+       $1, $2
    WHERE NOT EXISTS (
-       SELECT 1 FROM tagme.conversation WHERE ((user1_id = $1 AND user2_id = (select id from tagme."user" where nickname = $2)) OR (user1_id = (select id from tagme."user" where nickname = $2) AND user2_id = $1)))''', user_id, nickname)
+       SELECT 1 FROM tagme.conversation WHERE ((user1_id = $1 AND user2_id = $2) OR (user1_id = $2 AND user2_id = $1)))''', user_id, nickname)
             status = True
             message = 'success'
         else:
@@ -178,7 +274,8 @@ async def accept_friend(token, nickname): # принятие в друзья
     finally:
         await connection.close()
 
-async def reject_friend(token, nickname): # Отклонение запроса в друзья
+#Вообще эту функцию можно использовать еще как удаление из друзей!
+async def reject_friend(token, nickname): # Отклонение запроса в друзья -- переделано: nickname - это user_id второго польз.
     global status, message, tokenManager
     connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
                                        host='141.8.193.201')
@@ -187,7 +284,7 @@ async def reject_friend(token, nickname): # Отклонение запроса 
             user_id = await tokenManager.get_user_id(token)
             await connection.execute('''UPDATE tagme.user_link 
 SET relation = 'default'
-WHERE (user1_id = $1 and user2_id = (select id from tagme."user" where nickname = $2)) or (user1_id = (select id from tagme."user" where nickname = $2) and user2_id = $1)''', user_id, nickname)
+WHERE (user1_id = $1 and user2_id = $2) or (user1_id = $2 and user2_id = $1)''', user_id, nickname)
             status = True
             message = 'success'
         else:
@@ -199,7 +296,27 @@ WHERE (user1_id = $1 and user2_id = (select id from tagme."user" where nickname 
     finally:
         await connection.close()
 
-async def loading_chat(token):
+async def loading_friend_requests(token): # Загрузка списка входящих и исходящих заявок в друзья
+    global status, message, tokenManager
+    connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
+                                       host='141.8.193.201')
+    try:
+        if await tokenManager.read_dictionary(token):
+            user_id = await tokenManager.get_user_id(token)
+            result = await connection.fetchval('''SELECT "user".id, nickname FROM tagme."user"
+       LEFT JOIN tagme.user_link ON tagme."user".id = tagme.user_link.user2_id AND tagme.user_link.user1_id = $1
+WHERE tagme.user_link.relation = 'incoming' OR tagme.user_link.relation = \'outgoing\'''', user_id)
+            status = True
+            message = result
+        else:
+            status = False
+            message = 'failed loading friend_requests'
+    except:
+        message = str(sys.exc_info()[1])
+        status = False
+    finally:
+        await connection.close()
+async def loading_chats(token):
     global status, message, tokenManager
     connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
                                        host='141.8.193.201')
@@ -211,7 +328,7 @@ async def loading_chat(token):
             message = result
         else:
             status = False
-            message = 'failed loading chat'
+            message = 'failed loading chats'
     except:
         message = str(sys.exc_info()[1])
         status = False
