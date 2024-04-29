@@ -6,8 +6,7 @@ import sys
 import secrets
 import datetime
 import base64
-status = True
-message = ''
+
 class TokenManager:
 
     def __init__(self):
@@ -36,7 +35,9 @@ class TokenManager:
 
 tokenManager = TokenManager()
 async def register_user(username, password): # Регистрация пользователя
-    global status, message, tokenManager
+    global tokenManager
+    status = True
+    message = ''
     connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable', host='141.8.193.201')
     try:
         result = await connection.fetchval('''SELECT CASE WHEN EXISTS (SELECT * FROM tagme."user" WHERE nickname = $1) THEN 'TRUE' ELSE 'FALSE' END AS result''', username)
@@ -55,8 +56,11 @@ async def register_user(username, password): # Регистрация польз
         status = False
     finally:
         await connection.close()
+    return status, message
 async def login_user(username, password): # Вход пользователя
-    global status, message, tokenManager
+    global tokenManager
+    status = True
+    message = ''
     connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable', host='141.8.193.201')
     try:
         result = await connection.fetchval('''SELECT CASE WHEN EXISTS (SELECT * FROM tagme."user" WHERE nickname = $1 AND password = $2) THEN (select id from tagme."user" WHERE nickname = $1 AND password = $2)::varchar(10) ELSE 'FALSE' END AS result''', username, password)
@@ -76,17 +80,23 @@ async def login_user(username, password): # Вход пользователя
         status = False
     finally:
         await connection.close()
+    return status, message
 async def login_token(token): #Вход по токену
-    global status, message, tokenManager
+    global tokenManager
+    status = True
+    message = ''
     if await tokenManager.read_dictionary(token):
         status = True
         message = 'success'
     else:
         status = False
         message = 'error'
+    return status, message
 
 async def send_location(token, latitude, longitude, accuracy, speed, timestamp): #Обновление location пользователя
-    global status, message, tokenManager
+    global tokenManager
+    status = True
+    message = ''
     connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable', host='141.8.193.201')
     try:
         if await tokenManager.read_dictionary(token):
@@ -102,9 +112,12 @@ async def send_location(token, latitude, longitude, accuracy, speed, timestamp):
         status = False
     finally:
         await connection.close()
+    return status, message
 
 async def get_friends(token): # Получение списка друзей
-    global status, message, tokenManager
+    global tokenManager
+    status = True
+    message = ''
     connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable', host='141.8.193.201')
     try:
         if await tokenManager.read_dictionary(token):
@@ -124,8 +137,11 @@ WHERE user1_id = $1 AND relation = \'friend\'''', user_id)
         status = False
     finally:
         await connection.close()
+    return status, message
 async def get_locations(token): # получение локации друзей
-    global status, message, tokenManager
+    global tokenManager
+    status = True
+    message = ''
     connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable', host='141.8.193.201')
     try:
         if await tokenManager.read_dictionary(token):
@@ -150,9 +166,12 @@ WHERE tagme.user_link.relation = \'friend\'''', user_id)
         status = False
     finally:
         await connection.close()
+    return status, message
 
 async def add_friend(token, nickname): #Отправка заявки в друзья
-    global status, message, tokenManager
+    global tokenManager
+    status = True
+    message = ''
     connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
                                        host='141.8.193.201')
     try:
@@ -208,9 +227,12 @@ async def add_friend(token, nickname): #Отправка заявки в дру�
         status = False
     finally:
         await connection.close()
+    return status, message
 
 async def get_picture(token, picture_id):   # Загрузка картинки
-    global status, message, tokenManager
+    global tokenManager
+    status = True
+    message = ''
     connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
                                        host='141.8.193.201')
     try:
@@ -228,9 +250,12 @@ async def get_picture(token, picture_id):   # Загрузка картинки
         status = False
     finally:
         await connection.close()
+    return status, message
 
 async def get_my_data(token):   # Получение данных пользователя(по токену)
-    global status, message, tokenManager
+    global tokenManager
+    status = True
+    message = ''
     connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
                                        host='141.8.193.201')
     try:
@@ -248,8 +273,11 @@ async def get_my_data(token):   # Получение данных пользов
         status = False
     finally:
         await connection.close()
+    return status, message
 async def cancel_outgoing_request(token, user2_id): # Отменить исходящую заявку
-    global status, message, tokenManager
+    global tokenManager
+    status = True
+    message = ''
     connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
                                        host='141.8.193.201')
     try:
@@ -269,8 +297,11 @@ async def cancel_outgoing_request(token, user2_id): # Отменить исхо�
         status = False
     finally:
         await connection.close()
+    return status, message
 async def accept_request(token, user2_id): # принятие в друзья -- переделано: nickname - это user_id второго польз.
-    global status, message, tokenManager
+    global tokenManager
+    status = True
+    message = ''
     connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
                                        host='141.8.193.201')
     try:
@@ -295,10 +326,13 @@ async def accept_request(token, user2_id): # принятие в друзья --
         status = False
     finally:
         await connection.close()
+    return status, message
 
 #Вообще эту функцию можно использовать еще как удаление из друзей!
 async def deny_request(token, user2_id): # Отклонение запроса в друзья -- переделано: nickname - это user_id второго польз.
-    global status, message, tokenManager
+    global tokenManager
+    status = True
+    message = ''
     connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
                                        host='141.8.193.201')
     try:
@@ -317,8 +351,11 @@ WHERE (user1_id = $1 and user2_id = $2) or (user1_id = $2 and user2_id = $1)''',
         status = False
     finally:
         await connection.close()
+    return status, message
 async def get_friend_requests(token): # Загрузка списка входящих и исходящих заявок в друзья
-    global status, message, tokenManager
+    global tokenManager
+    status = True
+    message = ''
     connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
                                        host='141.8.193.201')
     try:
@@ -344,8 +381,11 @@ async def get_friend_requests(token): # Загрузка списка входя
         status = False
     finally:
         await connection.close()
+    return status, message
 async def get_chats(token):    #Загрузка чатов
-    global status, message, tokenManager
+    global tokenManager
+    status = True
+    message = ''
     connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
                                        host='141.8.193.201')
     try:
@@ -371,8 +411,11 @@ WHERE (user1_id = $1 OR user2_id = $1) AND ("user".id != $1) AND (not exists(sel
         status = False
     finally:
         await connection.close()
+    return status, message
 async def get_messages(token, conversation_id, last_msg_id):    #Загрузка сообщений в чате
-    global status, message, tokenManager
+    global tokenManager
+    status = True
+    message = ''
     connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
                                        host='141.8.193.201')
     try:
@@ -412,8 +455,11 @@ ORDER BY id ASC''', conversation_id)
         status = False
     finally:
         await connection.close()
+    return status, message
 async def get_new_messages(token, conversation_id, last_msg_id):    #Загрузка НОВЫХ сообщений в чате
-    global status, message, tokenManager
+    global tokenManager
+    status = True
+    message = ''
     connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
                                        host='141.8.193.201')
     try:
@@ -438,8 +484,11 @@ WHERE (conversation_id = $1 AND author_id != $2)''', conversation_id, user_id)
         status = False
     finally:
         await connection.close()
+    return status, message
 async def send_message(token, conversation_id, text, picture_id):   #Отправка сообщения
-    global status, message, tokenManager
+    global tokenManager
+    status = True
+    message = ''
     connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
                                        host='141.8.193.201')
     try:
@@ -461,9 +510,12 @@ VALUES ($1, $2, $3, $4, FALSE, $5)''', conversation_id, user_id, text, picture_i
         status = False
     finally:
         await connection.close()
+    return status, message
 
-async  def create_geo_story(token, privacy, picture_id, views, latitude, longitude):
-    global status, message, tokenManager
+async def create_geo_story(token, privacy, picture_id, views, latitude, longitude):
+    global tokenManager
+    status = True
+    message = ''
     connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
                                        host='141.8.193.201')
     try:
@@ -486,8 +538,11 @@ VALUES($1, $2, $3, $4, $5, $6, $7)''', user_id, privacy, picture_id, views, lati
         status = False
     finally:
         await connection.close()
-async  def get_geo_story(token, geo_story_id):
-    global status, message, tokenManager
+    return status, message
+async def get_geo_story(token, geo_story_id):
+    global tokenManager
+    status = True
+    message = ''
     connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
                                        host='141.8.193.201')
     try:
@@ -512,8 +567,11 @@ async  def get_geo_story(token, geo_story_id):
         status = False
     finally:
         await connection.close()
+    return status, message
 async def Websocket(websocket, path):
-    global status, message, tokenManager
+    global tokenManager
+    status = True
+    message = ''
     while True:
         data = await websocket.recv()  # Получение данных от клиента
         user_data = json.loads(data)  # Преобразование полученных данных из JSON в объект Python
@@ -522,7 +580,6 @@ async def Websocket(websocket, path):
             case "register":
                 username = user_data.get('username')  # Получение логина пользователя из запроса
                 password = user_data.get('password')  # Получение пароля пользователя из запроса
-
                 if username and password:  # Проверка наличия логина и пароля в запросе
                     status = True
                     message = 'success'
@@ -544,7 +601,7 @@ async def Websocket(websocket, path):
                         error_list.append('no digits')
                         status = False
                     if status:
-                        await register_user(username, password)
+                        status, message = await register_user(username, password)
                     else:
                         message = 'input_error:' + ', '.join(error_list)
                 else:
@@ -552,15 +609,14 @@ async def Websocket(websocket, path):
             case "login":
                 username = user_data.get('username')
                 password = user_data.get('password')
-                await login_user(username, password)
-
+                status, message = await login_user(username, password)
             case "validate token":
                 token = user_data.get('token')
-                await login_token(token)
+                status, message = await login_token(token)
 
             case "get friends":
                 token = user_data.get('token')
-                await get_friends(token)
+                status, message = await get_friends(token)
 
             case "send location":
                 token = user_data.get('token')
@@ -569,55 +625,55 @@ async def Websocket(websocket, path):
                 accuracy = float(user_data.get('accuracy'))
                 speed = float(user_data.get('speed'))
                 timestamp = datetime.datetime.now()
-                await send_location(token, latitude, longitude, accuracy, speed, timestamp)
+                status, message = await send_location(token, latitude, longitude, accuracy, speed, timestamp)
             case "get locations":
                 token = user_data.get('token')
-                await get_locations(token)
+                status, message = await get_locations(token)
             case "add friend":
                 token = user_data.get('token')
                 nickname = user_data.get('nickname')
-                await add_friend(token, nickname)
+                status, message = await add_friend(token, nickname)
             case "accept request":
                 token = user_data.get('token')
                 user2_id = user_data.get('user2_id')
-                await accept_request(token, user2_id)
+                status, message = await accept_request(token, user2_id)
             case "cancel request":
                 token = user_data.get('token')
                 user2_id = user_data.get('user2_id')
-                await cancel_outgoing_request(token, user2_id)
+                status, message = await cancel_outgoing_request(token, user2_id)
             case "deny request":
                 token = user_data.get('token')
                 user2_id = user_data.get('user2_id')
-                await deny_request(token, user2_id)
+                status, message = await deny_request(token, user2_id)
             case "get conversations":
                 token = user_data.get('token')
-                await get_chats(token)
+                status, message = await get_chats(token)
             case "get friend requests":
                 token = user_data.get('token')
-                await get_friend_requests(token)
+                status, message = await get_friend_requests(token)
             case "get messages":
                 token = user_data.get('token')
                 last_message_id = user_data.get('last_message_id')
                 conversation_id = user_data.get('conversation_id')
-                await get_messages(token, conversation_id, last_message_id)
+                status, message = await get_messages(token, conversation_id, last_message_id)
             case "send message":
                 token = user_data.get('token')
                 conversation_id = user_data.get('conversation_id')
                 text = user_data.get('text')
                 picture_id = user_data.get('picture_id')
-                await send_message(token, conversation_id,  text, picture_id)
+                status, message = await send_message(token, conversation_id,  text, picture_id)
             case "get picture":
                 token = user_data.get('token')
                 picture_id = user_data.get('picture_id')
-                await get_picture(token, picture_id)
+                status, message = await get_picture(token, picture_id)
             case "get new messages":
                 token = user_data.get('token')
                 last_message_id = user_data.get('last_message_id')
                 conversation_id = user_data.get('conversation_id')
-                await get_new_messages(token, conversation_id, last_message_id)
+                status, message = await get_new_messages(token, conversation_id, last_message_id)
             case "get my data":
                 token = user_data.get('token')
-                await get_my_data(token)
+                status, message = await get_my_data(token)
             case _:
                 status = False
                 message = "action mismatch"
