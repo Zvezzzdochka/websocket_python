@@ -12,21 +12,27 @@ class TokenManager:
 
     def __init__(self):
         self.dictionary_token = {}
+        self._lock = asyncio.Lock()
     async def generate_token(self): # Генерация токена
-        return secrets.token_urlsafe(16)
+        async with self._lock:
+            return secrets.token_urlsafe(16)
 
     async def write_dictionary(self, user_id, token): # Запись токена
-        self.dictionary_token[user_id] = token
-        self.dictionary_token[token] = user_id
+        async with self._lock:
+            self.dictionary_token[user_id] = token
+            self.dictionary_token[token] = user_id
 
     async def read_dictionary(self, user_id): # Проверка наличия id (или токена)
-        return user_id in self.dictionary_token
+        async with self._lock:
+            return user_id in self.dictionary_token
 
     async def get_user_id(self, token):
-        return self.dictionary_token[token]
+        async with self._lock:
+            return self.dictionary_token[token]
 
     async def pop_dictionary(self, user_id):
-        self.dictionary_token.pop(self.dictionary_token[user_id])
+        async with self._lock:
+            self.dictionary_token.pop(self.dictionary_token[user_id])
 
 tokenManager = TokenManager()
 async def register_user(username, password): # Регистрация пользователя
