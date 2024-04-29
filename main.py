@@ -406,7 +406,6 @@ ORDER BY id ASC''', conversation_id)
         status = False
     finally:
         await connection.close()
-
 async def get_new_messages(token, conversation_id, last_msg_id):    #Загрузка НОВЫХ сообщений в чате
     global status, message, tokenManager
     connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
