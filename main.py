@@ -109,7 +109,7 @@ async def get_friends(token): # Получение списка друзей
 WHERE user1_id = $1 AND relation = \'friend\'''', user_id)
             result = {"result": [{"user_id": record["user_id"], "nickname": record["nickname"], "picture_id": record["picture_id"]} for record in records]}
             status = True
-            message = json.dumps((result))
+            message = json.dumps(result)
         else:
             status = False
             message = 'invalid token'
@@ -135,7 +135,7 @@ WHERE tagme.user_link.relation = \'friend\'''', user_id)
                                   "speed": record["speed"],
                                   "timestamp": record["timestamp"].isoformat()} for record in records]}
             status = True
-            message = json.dumps((result))
+            message = json.dumps(result)
         else:
             status = False
             message = 'invalid token'
@@ -213,7 +213,7 @@ async def get_picture(token, picture_id):   # Загрузка картинки
             records = await connection.fetch('''SELECT id, picture FROM tagme.picture WHERE (id = $1)''', picture_id)
             result = {"result": [{"picture_id": record['id'], "picture": base64.b64encode(record["picture"]).decode('utf-8')} for record in records]}
             status = True
-            message = result
+            message = json.dumps(result)
         else:
             status = False
             message = 'invalid token'
@@ -223,16 +223,17 @@ async def get_picture(token, picture_id):   # Загрузка картинки
     finally:
         await connection.close()
 
-async def get_my_data(token):   # Загрузка картинки
+async def get_my_data(token):   # Получение данных пользователя(по токену)
     global status, message, tokenManager
     connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
                                        host='141.8.193.201')
     try:
         if await tokenManager.read_dictionary(token):
             user_id = await tokenManager.get_user_id(token)
-            result = await connection.fetchval('''SELECT "user".picture_id FROM tagme."user" WHERE id = $1''', user_id)
+            records = await connection.fetch('''SELECT id, "user".picture_id FROM tagme."user" WHERE id = $1''', user_id)
+            result = {"result": [{"user_id": record["id"], "picture_id": record["picture_id"]} for record in records]}
             status = True
-            message = result
+            message = json.dumps(result)
         else:
             status = False
             message = 'invalid token'
@@ -262,7 +263,6 @@ async def cancel_outgoing_request(token, user2_id): # Отменить исхо�
         status = False
     finally:
         await connection.close()
-
 async def accept_request(token, user2_id): # принятие в друзья -- переделано: nickname - это user_id второго польз.
     global status, message, tokenManager
     connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
@@ -311,7 +311,6 @@ WHERE (user1_id = $1 and user2_id = $2) or (user1_id = $2 and user2_id = $1)''',
         status = False
     finally:
         await connection.close()
-
 async def get_friend_requests(token): # Загрузка списка входящих и исходящих заявок в друзья
     global status, message, tokenManager
     connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
@@ -330,7 +329,7 @@ async def get_friend_requests(token): # Загрузка списка входя
                                   "picture_id": record['picture_id'], "relation": record["relation"]} for record in
                                  records]}
             status = True
-            message = result
+            message = json.dumps((result))
         else:
             status = False
             message = 'token invalid'
@@ -346,14 +345,18 @@ async def get_chats(token):    #Загрузка чатов
     try:
         if await tokenManager.read_dictionary(token):
             user_id = await tokenManager.get_user_id(token)
-            records = await connection.fetch('''SELECT conversation.id AS conversation_id, "user".id AS user_id, nickname, picture.id AS picture_id  FROM tagme.conversation
-      LEFT JOIN tagme."user" ON "user".id = conversation.user1_id OR "user".id = conversation.user2_id
-      LEFT JOIN tagme.picture ON tagme."user".picture_id = tagme.picture.id
-WHERE (user1_id = $1 OR user2_id = $1) AND ("user".id != $1)''', user_id)
+            records = await connection.fetch('''SELECT conversation.id AS conversation_id, "user".id AS user_id, nickname,  picture.id AS profile_picture_id, author_id, text, message.picture_id AS msg_picture_id, read, message.timestamp AS timestamp FROM tagme.conversation
+    LEFT JOIN tagme."user" ON "user".id = conversation.user1_id OR "user".id = conversation.user2_id
+    LEFT JOIN tagme.picture ON tagme."user".picture_id = tagme.picture.id
+    LEFT JOIN tagme.message ON conversation.id = message.conversation_id
+WHERE (user1_id = $1 OR user2_id = $1) AND ("user".id != $1) AND (not exists(select * from tagme.message where conversation_id = conversation.id) OR (message.id = (select id from tagme.message where conversation_id = conversation.id order by id desc limit 1)))''', user_id)
             result = {"result": [{"conversation_id": record['conversation_id'], "user_id": record['user_id'],
-                                  "nickname": record['nickname'], "picture_id": record['picture_id']} for record in records]}
+                                  "author_id": record["author_id"], "nickname": record['nickname'],
+                                  "profile_picture_id": record['profile_picture_id'],
+                                  "text": record["text"], "msg_picture_id": record["msg_picture_id"],
+                                  "read": record["read"], "timestamp": record["timestamp"].isoformat() if record["timestamp"] else None} for record in records]}
             status = True
-            message = result
+            message = json.dumps(result)
         else:
             status = False
             message = 'invalid token'
@@ -362,15 +365,87 @@ WHERE (user1_id = $1 OR user2_id = $1) AND ("user".id != $1)''', user_id)
         status = False
     finally:
         await connection.close()
-
-async def get_messages(token, last_msg_id):    #Загрузка сообщений в чате
+async def get_messages(token, conversation_id, last_msg_id):    #Загрузка сообщений в чате
     global status, message, tokenManager
     connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
                                        host='141.8.193.201')
     try:
         if await tokenManager.read_dictionary(token):
             user_id = await tokenManager.get_user_id(token)
-            result = await connection.fetchval('select id, author_id ,text, timestamp from tagme.message where (conversation_id = $1 AND id < $2) LIMIT 20', user_id, last_msg_id)
+            if last_msg_id == -1:
+                records = await connection.fetch('''SELECT * FROM (
+                  SELECT id, conversation_id, author_id, text, picture_id, read, timestamp
+                  FROM tagme.message
+                  WHERE conversation_id = $1
+                    AND id <= (SELECT id FROM tagme.message ORDER BY id DESC LIMIT 1)
+                  ORDER BY id DESC
+                  LIMIT 20
+              ) AS subquery
+ORDER BY id ASC''', conversation_id)
+                result = {"result": [{"message_id": record["id"], "conversation_id": record["conversation_id"],
+                                      "author_id": record["author_id"],
+                                      "text": record["text"], "picture_id": record["picture_id"], "read": record["read"],
+                                      "timestamp": record["timestamp"].isoformat()} for record in records]}
+            else:
+                records = await connection.fetch('select id, conversation_id, author_id ,text, picture_id, read, timestamp from tagme.message where (conversation_id = $1 and id <= $2) LIMIT 20',
+                                                 conversation_id, last_msg_id)
+                result = {"result": [{"message_id": record["id"], "conversation_id": record["conversation_id"], "author_id": record["author_id"],
+                                      "text": record["text"], "picture_id": record["picture_id"], "read": record["read"],
+                                      "timestamp": record["timestamp"].isoformat()} for record in records]}
+            status = True
+            message = json.dumps(result)
+
+            await connection.execute('''UPDATE tagme.message
+            SET read = TRUE
+            WHERE (conversation_id = $1 AND author_id != $2)''', conversation_id, user_id)
+        else:
+            status = False
+            message = 'token invalid'
+    except:
+        message = str(sys.exc_info()[1])
+        status = False
+    finally:
+        await connection.close()
+
+async def get_new_messages(token, conversation_id, last_msg_id):    #Загрузка НОВЫХ сообщений в чате
+    global status, message, tokenManager
+    connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
+                                       host='141.8.193.201')
+    try:
+        if await tokenManager.read_dictionary(token):
+            user_id = await tokenManager.get_user_id(token)
+            records = await connection.fetch('select id, conversation_id, author_id ,text, picture_id, read, timestamp from tagme.message where (conversation_id = $1 and id > $2)',
+                                             conversation_id, last_msg_id)
+            result = {"result": [{"message_id": record["id"], "conversation_id": record["conversation_id"],"author_id": record["author_id"],
+                                  "text": record["text"], "picture_id": record["picture_id"], "read": record["read"],
+                                  "timestamp": record["timestamp"].isoformat()} for record in records]}
+
+            await connection.execute('''UPDATE tagme.message
+SET read = TRUE
+WHERE (conversation_id = $1 AND author_id != $2)''', conversation_id, user_id)
+            status = True
+            message = json.dumps(result)
+        else:
+            status = False
+            message = 'token invalid'
+    except:
+        message = str(sys.exc_info()[1])
+        status = False
+    finally:
+        await connection.close()
+async def send_message(token, conversation_id, text, picture_id):   #Отправка сообщения
+    global status, message, tokenManager
+    connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
+                                       host='141.8.193.201')
+    try:
+        if await tokenManager.read_dictionary(token):
+            user_id = await tokenManager.get_user_id(token)
+            records = await connection.fetch(
+                '''INSERT INTO tagme.message (conversation_id, author_id, text, picture_id, read, timestamp)
+VALUES ($1, $2, $3, $4, FALSE, $5)''', conversation_id, user_id, text, picture_id, datetime.datetime.now())
+            result = {"result": [{"conversation_id": record["conversation_id"], "author_id": record["author_id"],
+                                  "text": record["text"], "picture_id": record["picture_id"], "read": record["read"],
+                                  "timestamp": record["timestamp"]} for record in records]}
             status = True
             message = result
         else:
@@ -391,13 +466,13 @@ async  def create_geo_story(token, privacy, picture_id, views, latitude, longitu
             user_id = await tokenManager.get_user_id(token)
             records = await connection.fetch(
                 '''INSERT INTO tagme.geo_story (creator_id, privacy, picture_id, views, latitude, longitude, timestamp)
-VALUES($1, $2, $3, $4, $5, $6, $7);''', user_id, privacy, picture_id, views, latitude, longitude, datetime.datetime.now())
+VALUES($1, $2, $3, $4, $5, $6, $7)''', user_id, privacy, picture_id, views, latitude, longitude, datetime.datetime.now())
             result = {"result": [{"creator_id": record["creator_id"], "privacy": record["privacy"],
                                   "picture_id": record["picture_id"], "views": record["views"],
                                   "latitude": record["latitude"], "longitude": record["longitude"],
                                   "timestamp": record["timestamp"]} for record in records]}
             status = True
-            message = result
+            message = json.dumps(result)
         else:
             status = False
             message = 'token invalid'
@@ -423,7 +498,7 @@ async  def get_geo_story(token, geo_story_id):
             set views = views + 1 
             where id = $1''', geo_story_id)
             status = True
-            message = result
+            message = json.dumps(result)
         else:
             status = False
             message = 'token invalid'
@@ -517,12 +592,24 @@ async def Websocket(websocket, path):
                 await get_friend_requests(token)
             case "get messages":
                 token = user_data.get('token')
-                message_id = user_data.get('msg_id')
-                await get_messages(token, message_id)
+                last_message_id = user_data.get('last_message_id')
+                conversation_id = user_data.get('conversation_id')
+                await get_messages(token, conversation_id, last_message_id)
+            case "send message":
+                token = user_data.get('token')
+                conversation_id = user_data.get('conversation_id')
+                text = user_data.get('text')
+                picture_id = user_data.get('picture_id')
+                await send_message(token, conversation_id,  text, picture_id)
             case "get picture":
                 token = user_data.get('token')
                 picture_id = user_data.get('picture_id')
                 await get_picture(token, picture_id)
+            case "get new messages":
+                token = user_data.get('token')
+                last_message_id = user_data.get('last_message_id')
+                conversation_id = user_data.get('conversation_id')
+                await get_new_messages(token, conversation_id, last_message_id)
             case "get my data":
                 token = user_data.get('token')
                 await get_my_data(token)
