@@ -106,7 +106,7 @@ async def send_location(token, latitude, longitude, accuracy, speed, timestamp):
             message = 'success'
         else:
             status = False
-            message = 'token invalid'
+            message = 'invalid token'
     except:
         message = str(sys.exc_info()[1])
         status = False
@@ -221,7 +221,7 @@ async def add_friend(token, nickname): #Отправка заявки в дру�
             message = 'success'
         else:
             status = False
-            message = 'token invalid'
+            message = 'invalid token'
     except:
         message = str(sys.exc_info()[1])
         status = False
@@ -239,7 +239,7 @@ async def get_picture(token, picture_id):   # Загрузка картинки
         if await tokenManager.read_dictionary(token):
             user_id = await tokenManager.get_user_id(token)
             records = await connection.fetch('''SELECT id, picture FROM tagme.picture WHERE (id = $1)''', picture_id)
-            result = {"result": [{"picture_id": record['id'], "picture": base64.b64encode(record["picture"]).decode('utf-8')} for record in records]}
+            result = {"result": [{"picture_id": record['id'], "picture": str(record["picture"])[2:-1]} for record in records]}
             status = True
             message = json.dumps(result)
         else:
@@ -291,7 +291,7 @@ async def cancel_outgoing_request(token, user2_id): # Отменить исхо�
             message = 'success'
         else:
             status = False
-            message = 'token invalid'
+            message = 'invalid token'
     except:
         message = str(sys.exc_info()[1])
         status = False
@@ -320,7 +320,7 @@ async def accept_request(token, user2_id): # принятие в друзья --
             message = 'success'
         else:
             status = False
-            message = 'token invalid'
+            message = 'invalid token'
     except:
         message = str(sys.exc_info()[1])
         status = False
@@ -345,7 +345,7 @@ WHERE (user1_id = $1 and user2_id = $2) or (user1_id = $2 and user2_id = $1)''',
             message = 'success'
         else:
             status = False
-            message = 'token invalid'
+            message = 'invalid token'
     except:
         message = str(sys.exc_info()[1])
         status = False
@@ -375,7 +375,7 @@ async def get_friend_requests(token): # Загрузка списка входя
             message = json.dumps((result))
         else:
             status = False
-            message = 'token invalid'
+            message = 'invalid token'
     except:
         message = str(sys.exc_info()[1])
         status = False
@@ -449,7 +449,7 @@ ORDER BY id ASC''', conversation_id)
             WHERE (conversation_id = $1 AND author_id != $2)''', conversation_id, user_id)
         else:
             status = False
-            message = 'token invalid'
+            message = 'invalid token'
     except:
         message = str(sys.exc_info()[1])
         status = False
@@ -478,7 +478,7 @@ WHERE (conversation_id = $1 AND author_id != $2)''', conversation_id, user_id)
             message = json.dumps(result)
         else:
             status = False
-            message = 'token invalid'
+            message = 'invalid token'
     except:
         message = str(sys.exc_info()[1])
         status = False
@@ -494,25 +494,44 @@ async def send_message(token, conversation_id, text, picture_id):   #Отпра�
     try:
         if await tokenManager.read_dictionary(token):
             user_id = await tokenManager.get_user_id(token)
-            records = await connection.fetch(
+            await connection.fetch(
                 '''INSERT INTO tagme.message (conversation_id, author_id, text, picture_id, read, timestamp)
 VALUES ($1, $2, $3, $4, FALSE, $5)''', conversation_id, user_id, text, picture_id, datetime.datetime.now())
-            result = {"result": [{"conversation_id": record["conversation_id"], "author_id": record["author_id"],
-                                  "text": record["text"], "picture_id": record["picture_id"], "read": record["read"],
-                                  "timestamp": record["timestamp"]} for record in records]}
             status = True
-            message = result
+            message = "success"
         else:
             status = False
-            message = 'token invalid'
+            message = 'invalid token'
     except:
         message = str(sys.exc_info()[1])
         status = False
     finally:
         await connection.close()
     return status, message
-
-async def create_geo_story(token, privacy, picture_id, views, latitude, longitude):
+async def create_geo_story(token, privacy, picture_id, latitude, longitude):
+    global tokenManager
+    status = True
+    message = ''
+    connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
+                                       host='141.8.193.201')
+    try:
+        if await tokenManager.read_dictionary(token):
+            user_id = await tokenManager.get_user_id(token)
+            await connection.execute(
+                '''INSERT INTO tagme.geo_story (creator_id, privacy, picture_id, views, latitude, longitude, timestamp)
+VALUES($1, $2, $3, 0, $4, $5, $6)''', user_id, privacy, picture_id, latitude, longitude, datetime.datetime.now())
+            status = True
+            message = "success"
+        else:
+            status = False
+            message = 'invalid token'
+    except:
+        message = str(sys.exc_info()[1])
+        status = False
+    finally:
+        await connection.close()
+    return status, message
+async def get_geo_stories(token):
     global tokenManager
     status = True
     message = ''
@@ -522,17 +541,18 @@ async def create_geo_story(token, privacy, picture_id, views, latitude, longitud
         if await tokenManager.read_dictionary(token):
             user_id = await tokenManager.get_user_id(token)
             records = await connection.fetch(
-                '''INSERT INTO tagme.geo_story (creator_id, privacy, picture_id, views, latitude, longitude, timestamp)
-VALUES($1, $2, $3, $4, $5, $6, $7)''', user_id, privacy, picture_id, views, latitude, longitude, datetime.datetime.now())
-            result = {"result": [{"creator_id": record["creator_id"], "privacy": record["privacy"],
-                                  "picture_id": record["picture_id"], "views": record["views"],
-                                  "latitude": record["latitude"], "longitude": record["longitude"],
-                                  "timestamp": record["timestamp"]} for record in records]}
+                '''SELECT geo_story.id AS geo_story_id, geo_story.timestamp, geo_story.picture_id, geo_story.latitude, geo_story.longitude, geo_story.creator_id, geo_story.privacy FROM tagme.geo_story
+    LEFT JOIN tagme.location ON tagme.location.user_id = $1
+    LEFT JOIN tagme.user_link ON tagme.user_link.user1_id = creator_id AND tagme.user_link.user2_id = $1
+WHERE ((tagme.geo_story.timestamp::timestamptz > now() - interval '21 hour') AND (((acos(sin(radians(tagme.location.latitude))*sin(radians(geo_story.latitude))+cos(radians(tagme.location.latitude))*cos(radians(geo_story.latitude))*cos(radians(geo_story.longitude)-radians(tagme.location.longitude)))*6371) < 0.7 AND privacy = 'global')
+    OR (tagme.user_link.relation = 'friend') OR (creator_id = $1)))''', user_id)
+            result = {"result": [{"geo_story_id": record["geo_story_id"], "picture_id": record["picture_id"],
+                                  "latitude": record["latitude"], "longitude": record["longitude"]} for record in records]}
             status = True
             message = json.dumps(result)
         else:
             status = False
-            message = 'token invalid'
+            message = 'invalid token'
     except:
         message = str(sys.exc_info()[1])
         status = False
@@ -559,6 +579,52 @@ async def get_geo_story(token, geo_story_id):
             where id = $1''', geo_story_id)
             status = True
             message = json.dumps(result)
+        else:
+            status = False
+            message = 'invalid token'
+    except:
+        message = str(sys.exc_info()[1])
+        status = False
+    finally:
+        await connection.close()
+    return status, message
+async def insert_picture(token, picture):
+    global tokenManager
+    status = True
+    message = ''
+    connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
+                                       host='141.8.193.201')
+    try:
+        if await tokenManager.read_dictionary(token):
+            user_id = await tokenManager.get_user_id(token)
+            result = await connection.fetchval(
+                '''INSERT INTO tagme.picture (picture)
+values ($1) RETURNING id''', bytearray(picture, encoding="utf-8"))
+            status = True
+            message = result
+        else:
+            status = False
+            message = 'invalid token'
+    except:
+        message = str(sys.exc_info()[1])
+        status = False
+    finally:
+        await connection.close()
+    return status, message
+
+async def set_profile_picture(token, picture_id): #Обновление location пользователя
+    global tokenManager
+    status = True
+    message = ''
+    connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable', host='141.8.193.201')
+    try:
+        if await tokenManager.read_dictionary(token):
+            user_id = await tokenManager.get_user_id(token)
+            await connection.execute('''UPDATE tagme."user"
+SET picture_id = $2
+WHERE id = $1''', user_id, picture_id)
+            status = True
+            message = 'success'
         else:
             status = False
             message = 'token invalid'
@@ -674,6 +740,24 @@ async def Websocket(websocket, path):
             case "get my data":
                 token = user_data.get('token')
                 status, message = await get_my_data(token)
+            case "insert picture":
+                token = user_data.get('token')
+                picture = user_data.get('picture')
+                status, message = await insert_picture(token, picture)
+            case "create geo story":
+                token = user_data.get('token')
+                privacy = user_data.get('privacy')
+                picture_id = user_data.get('picture_id')
+                latitude = float(user_data.get('latitude'))
+                longitude = float(user_data.get('longitude'))
+                status, message = await create_geo_story(token, privacy, picture_id, latitude, longitude)
+            case "get geo stories":
+                token = user_data.get('token')
+                status, message = await get_geo_stories(token)
+            case "set profile picture":
+                token = user_data.get('token')
+                picture_id = user_data.get('picture_id')
+                status, message = await set_profile_picture(token, picture_id)
             case _:
                 status = False
                 message = "action mismatch"
