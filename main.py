@@ -45,6 +45,12 @@ async def register_user(username, password): # Регистрация польз
             token = await tokenManager.generate_token()
             id_string = await connection.fetchval('INSERT INTO tagme."user" (nickname, password) VALUES($1, $2) returning id', username, password)
             id = int(id_string)
+
+            # ------------------------------Рейтинг!!!!--------------------
+            await connection.execute('''INSERT INTO tagme.rating (user_id, user_score, place)
+VALUES($1, 0, 0) ON CONFLICT (user_id) DO NOTHING''', id)
+            # ------------------------------Рейтинг!!!!--------------------
+
             await tokenManager.write_dictionary(id, token)
             status = True
             message = token
@@ -167,7 +173,42 @@ WHERE tagme.user_link.relation = \'friend\'''', user_id)
     finally:
         await connection.close()
     return status, message
+async def accept_request(token, user2_id): # принятие в друзья
+    global tokenManager
+    status = True
+    message = ''
+    connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
+                                       host='141.8.193.201')
+    try:
+        if await tokenManager.read_dictionary(token):
+            user_id = await tokenManager.get_user_id(token)
+            await connection.execute('''UPDATE tagme.user_link
+   set relation = 'friend', date_linked = $3
+   where (relation = 'incoming' OR relation = 'outgoing') AND
+       ((user1_id = $1 AND user2_id = $2) OR (user1_id = $2 AND user2_id = $1))''', user_id, user2_id, datetime.datetime.now())
+            await connection.execute('''INSERT INTO tagme.conversation (user1_id, user2_id)
+   SELECT
+       $1, $2
+   WHERE NOT EXISTS (
+       SELECT 1 FROM tagme.conversation WHERE ((user1_id = $1 AND user2_id = $2) OR (user1_id = $2 AND user2_id = $1)))''', user_id, user2_id)
 
+            #------------------------------Рейтинг!!!!--------------------
+            await connection.execute('''UPDATE tagme.rating
+SET user_score = user_score + 1
+where user_id = $1 OR user_id = $2''')
+            # ------------------------------Рейтинг!!!!--------------------
+
+            status = True
+            message = 'success'
+        else:
+            status = False
+            message = 'invalid token'
+    except:
+        message = str(sys.exc_info()[1])
+        status = False
+    finally:
+        await connection.close()
+    return status, message
 async def add_friend(token, nickname): #Отправка заявки в друзья
     global tokenManager
     status = True
@@ -184,7 +225,7 @@ async def add_friend(token, nickname): #Отправка заявки в дру�
             if doesExist == 'FALSE':
                 status = False
                 message = 'User doesn\'t exist'
-                return
+                return status, message
 
             isYou = await connection.fetchval('''SELECT CASE
            WHEN ((SELECT id FROM tagme."user" WHERE nickname = $2) = $1) THEN 'TRUE'
@@ -193,7 +234,7 @@ async def add_friend(token, nickname): #Отправка заявки в дру�
             if isYou == 'TRUE':
                 status = False
                 message = "Are u retarded?"
-                return
+                return status, message
 
             isBlocked = await connection.fetchval('''SELECT CASE
            WHEN EXISTS (SELECT * FROM tagme.user_link WHERE user1_id = (SELECT id from tagme."user" where nickname = $2)
@@ -204,7 +245,7 @@ async def add_friend(token, nickname): #Отправка заявки в дру�
             if isBlocked == 'TRUE':
                 status = False
                 message = 'You have been blocked by this user'
-                return
+                return status, message
 
             isFriend = await connection.fetchval('''SELECT CASE
            WHEN EXISTS (SELECT * FROM tagme.user_link WHERE user1_id = (SELECT id from tagme."user" where nickname = $2)
@@ -215,8 +256,18 @@ async def add_friend(token, nickname): #Отправка заявки в дру�
             if isFriend == 'TRUE':
                 status = False
                 message = 'You are already friends'
-                return
-            await connection.execute("CALL tagme.add_or_update_user_link($1, $2)", str(user_id), nickname)
+                return status, message
+            isRequest = await connection.fetchval('''SELECT CASE
+           WHEN EXISTS (SELECT * FROM tagme.user_link WHERE user1_id = (SELECT id from tagme."user" where nickname = $2)
+                                                        AND user2_id = $1
+                                                        AND relation = 'request_outgoing') THEN 'TRUE'
+           ELSE 'FALSE'
+           END AS result''', user_id, nickname)
+            if (isRequest == 'FALSE'):
+                await connection.execute("CALL tagme.add_or_update_user_link($1, $2)", str(user_id), nickname)
+            else:
+                user2_id = await connection.fetchval('''SELECT id from tagme."user" where nickname = $1''', nickname)
+                await accept_request(token, user2_id)
             status = True
             message = 'success'
         else:
@@ -287,35 +338,6 @@ async def cancel_outgoing_request(token, user2_id): # Отменить исхо�
                set relation = 'default'
                where (relation = 'incoming' OR relation = 'outgoing') AND
                    ((user1_id = $1 AND user2_id = $2) OR (user1_id = $2 AND user2_id = $1))''', user_id, user2_id)
-            status = True
-            message = 'success'
-        else:
-            status = False
-            message = 'invalid token'
-    except:
-        message = str(sys.exc_info()[1])
-        status = False
-    finally:
-        await connection.close()
-    return status, message
-async def accept_request(token, user2_id): # принятие в друзья -- переделано: nickname - это user_id второго польз.
-    global tokenManager
-    status = True
-    message = ''
-    connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
-                                       host='141.8.193.201')
-    try:
-        if await tokenManager.read_dictionary(token):
-            user_id = await tokenManager.get_user_id(token)
-            await connection.execute('''UPDATE tagme.user_link
-   set relation = 'friend', date_linked = $3
-   where (relation = 'incoming' OR relation = 'outgoing') AND
-       ((user1_id = $1 AND user2_id = $2) OR (user1_id = $2 AND user2_id = $1))''', user_id, user2_id, datetime.date.today())
-            await connection.execute('''INSERT INTO tagme.conversation (user1_id, user2_id)
-   SELECT
-       $1, $2
-   WHERE NOT EXISTS (
-       SELECT 1 FROM tagme.conversation WHERE ((user1_id = $1 AND user2_id = $2) OR (user1_id = $2 AND user2_id = $1)))''', user_id, user2_id)
             status = True
             message = 'success'
         else:
@@ -541,13 +563,16 @@ async def get_geo_stories(token):
         if await tokenManager.read_dictionary(token):
             user_id = await tokenManager.get_user_id(token)
             records = await connection.fetch(
-                '''SELECT geo_story.id AS geo_story_id, geo_story.timestamp, geo_story.picture_id, geo_story.latitude, geo_story.longitude, geo_story.creator_id, geo_story.privacy FROM tagme.geo_story
+                '''SELECT geo_story.id AS geo_story_id, geo_story.timestamp, geo_story.picture_id, geo_story.views,geo_story.latitude, geo_story.longitude, geo_story.creator_id, nickname, "user".picture_id AS profile_picture_id, geo_story.privacy FROM tagme.geo_story
     LEFT JOIN tagme.location ON tagme.location.user_id = $1
     LEFT JOIN tagme.user_link ON tagme.user_link.user1_id = creator_id AND tagme.user_link.user2_id = $1
+    LEFT JOIN tagme.user ON tagme."user".id = geo_story.creator_id
 WHERE ((tagme.geo_story.timestamp::timestamptz > now() - interval '21 hour') AND (((acos(sin(radians(tagme.location.latitude))*sin(radians(geo_story.latitude))+cos(radians(tagme.location.latitude))*cos(radians(geo_story.latitude))*cos(radians(geo_story.longitude)-radians(tagme.location.longitude)))*6371) < 0.7 AND privacy = 'global')
     OR (tagme.user_link.relation = 'friend') OR (creator_id = $1)))''', user_id)
-            result = {"result": [{"geo_story_id": record["geo_story_id"], "picture_id": record["picture_id"],
-                                  "latitude": record["latitude"], "longitude": record["longitude"]} for record in records]}
+            result = {"result": [{"geo_story_id": record["geo_story_id"], "timestamp": record["timestamp"].isoformat(), "views":record["views"],
+                                  "picture_id": record["picture_id"], "creator_id": record["creator_id"], "latitude": record["latitude"],
+                                  "longitude": record["longitude"], "nickname": record["nickname"], "profile_picture_id":record["profile_picture_id"],
+                                  "privacy":record["privacy"]} for record in records]}
             status = True
             message = json.dumps(result)
         else:
@@ -559,7 +584,7 @@ WHERE ((tagme.geo_story.timestamp::timestamptz > now() - interval '21 hour') AND
     finally:
         await connection.close()
     return status, message
-async def get_geo_story(token, geo_story_id):
+async def add_view_to_geo_story(token, geo_story_id):
     global tokenManager
     status = True
     message = ''
@@ -568,17 +593,11 @@ async def get_geo_story(token, geo_story_id):
     try:
         if await tokenManager.read_dictionary(token):
             user_id = await tokenManager.get_user_id(token)
-            records = await connection.fetch(
-                '''SELECT id, creator_id, privacy, picture_id, views, latitude, longitude, timestamp FROM tagme.geo_story where id = $1''', geo_story_id)
-            result = {"result": [{"geo_story_id": record["id"], "creator_id": record["creator_id"],
-                                  "privacy": record["privacy"], "picture_id": record["picture_id,"],
-                                  "views": record["views"], "latitude": record["latitude"], "longitude": record["longitude"],
-                                  "timestamp": record["timestamp"]} for record in records]}
             await connection.execute('''UPDATE tagme.geo_story
-            set views = views + 1 
-            where id = $1''', geo_story_id)
+set views = views + 1
+where id = $1''', geo_story_id)
             status = True
-            message = json.dumps(result)
+            message = "success"
         else:
             status = False
             message = 'invalid token'
@@ -612,6 +631,58 @@ values ($1) RETURNING id''', bytearray(picture, encoding="utf-8"))
         await connection.close()
     return status, message
 
+async def load_profile(token, profile_user_id):
+    global tokenManager
+    status = True
+    message = ''
+    connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
+                                       host='141.8.193.201')
+    try:
+        if await tokenManager.read_dictionary(token):
+            user_id = await tokenManager.get_user_id(token)
+            relation = await connection.fetchval(
+                '''SELECT relation from tagme.user_link where user1_id = $1 AND user2_id = $2''', user_id,
+                profile_user_id)
+
+            blocked_by_user2 = await connection.fetchval('''SELECT CASE
+           WHEN EXISTS (SELECT * FROM tagme.user_link WHERE user1_id = $2 AND user2_id = $1 AND relation = 'blocked') THEN 'TRUE'
+           ELSE 'FALSE'
+           END AS result''', user_id, profile_user_id)
+            if blocked_by_user2 == 'TRUE':
+                relation = 'block_incoming'
+
+            you_block_user = await connection.fetchval('''SELECT CASE
+                       WHEN EXISTS (SELECT * FROM tagme.user_link WHERE user1_id = $1 AND user2_id = $2 AND relation = 'blocked') THEN 'TRUE'
+                       ELSE 'FALSE'
+                       END AS result''', user_id, profile_user_id)
+            if you_block_user == 'TRUE':
+                relation = 'block_outgoing'
+
+            both_blocked = await connection.fetchval('''SELECT CASE
+           WHEN EXISTS (SELECT * FROM tagme.user_link WHERE ((user1_id = $1 AND user2_id = $2) AND (user1_id = $2 AND user2_id = $1) AND relation = 'blocked')) THEN 'TRUE'
+           ELSE 'FALSE'
+           END AS result''', user_id, profile_user_id)
+            if both_blocked == 'TRUE':
+                relation = 'block_mutual'
+
+            friend_count = await connection.fetchval('''SELECT count(user2_id) from tagme.user_link where user1_id = $1 AND relation = \'friend\'''', profile_user_id)
+
+            records = await connection.fetchrow('''SELECT nickname, picture_id, date_linked from tagme."user", tagme.user_link
+where "user".id = $2 AND user_link.user1_id = $1 AND user2_id = $2''',user_id ,profile_user_id)
+
+            result = {"nickname": records["nickname"], "picture_id": records["picture_id"], "relation" : relation, "friend_count" : friend_count, "date_linked" : records["date_linked"].isoformat() if records["date_linked"] else None}
+
+            status = True
+            message = json.dumps(result)
+        else:
+            status = False
+            message = 'invalid token'
+    except:
+        message = str(sys.exc_info()[1])
+        status = False
+    finally:
+        await connection.close()
+    return status, message
 async def set_profile_picture(token, picture_id): #Обновление location пользователя
     global tokenManager
     status = True
@@ -634,6 +705,17 @@ WHERE id = $1''', user_id, picture_id)
     finally:
         await connection.close()
     return status, message
+async def rating_update_task(update_interval):
+    while True:
+        connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
+                                           host='141.8.193.201')
+        await connection.execute('''UPDATE tagme.rating
+            SET place = (
+                SELECT COUNT(*) + 1
+                FROM tagme.rating AS r2
+                WHERE r2.user_score > rating.user_score
+            )''')
+        await asyncio.sleep(update_interval)  # Wait for the specified interval
 async def Websocket(websocket, path):
     global tokenManager
     status = True
@@ -642,6 +724,8 @@ async def Websocket(websocket, path):
         data = await websocket.recv()  # Получение данных от клиента
         user_data = json.loads(data)  # Преобразование полученных данных из JSON в объект Python
         action = user_data.get("action")
+        request_id = user_data.get("request_id")
+
         match action:
             case "register":
                 username = user_data.get('username')  # Получение логина пользователя из запроса
@@ -754,19 +838,27 @@ async def Websocket(websocket, path):
             case "get geo stories":
                 token = user_data.get('token')
                 status, message = await get_geo_stories(token)
+            case "add view to geo story":
+                token = user_data.get('token')
+                geostory_id = user_data.get('geostory_id')
+                status, message = await add_view_to_geo_story(token, geostory_id)
             case "set profile picture":
                 token = user_data.get('token')
                 picture_id = user_data.get('picture_id')
                 status, message = await set_profile_picture(token, picture_id)
+            case "load profile":
+                token = user_data.get('token')
+                profile_user_id = user_data.get('user_id')
+                status, message = await load_profile(token, profile_user_id)
             case _:
                 status = False
                 message = "action mismatch"
 
-        response = {'action': action, 'status': 'success' if status else 'error', 'message': message}
+        response = {'action': action, 'status': 'success' if status else 'error', 'request_id': request_id,'message': message}
         await websocket.send(json.dumps(response))  # Отправка ответа клиенту в формате JSON
 
 
 start_server = websockets.serve(Websocket, '141.8.193.201', 8765)  # Запуск WebSocket сервера на localhost и порту 8765
-
+#rating_update_task(86400)
 asyncio.get_event_loop().run_until_complete(start_server)  # Запуск сервера и ожидание его завершения
 asyncio.get_event_loop().run_forever()  # Бесконечный цикл для работы WebSocket сервера
