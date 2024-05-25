@@ -184,7 +184,7 @@ async def accept_request(token, user2_id): # принятие в друзья
             user_id = await tokenManager.get_user_id(token)
             await connection.execute('''UPDATE tagme.user_link
    set relation = 'friend', date_linked = $3
-   where (relation = 'incoming' OR relation = 'outgoing') AND
+   where (relation = 'request_incoming' OR relation = 'request_outgoing') AND
        ((user1_id = $1 AND user2_id = $2) OR (user1_id = $2 AND user2_id = $1))''', user_id, user2_id, datetime.datetime.now())
             await connection.execute('''INSERT INTO tagme.conversation (user1_id, user2_id)
    SELECT
@@ -195,7 +195,7 @@ async def accept_request(token, user2_id): # принятие в друзья
             #------------------------------Рейтинг!!!!--------------------
             await connection.execute('''UPDATE tagme.rating
 SET user_score = user_score + 1
-where user_id = $1 OR user_id = $2''')
+where user_id = $1 OR user_id = $2''', user_id, user2_id)
             # ------------------------------Рейтинг!!!!--------------------
 
             status = True
@@ -336,7 +336,7 @@ async def cancel_outgoing_request(token, user2_id): # Отменить исхо�
             user_id = await tokenManager.get_user_id(token)
             await connection.execute('''UPDATE tagme.user_link
                set relation = 'default'
-               where (relation = 'incoming' OR relation = 'outgoing') AND
+               where (relation = 'request_incoming' OR relation = 'request_outgoing') AND
                    ((user1_id = $1 AND user2_id = $2) OR (user1_id = $2 AND user2_id = $1))''', user_id, user2_id)
             status = True
             message = 'success'
@@ -351,7 +351,7 @@ async def cancel_outgoing_request(token, user2_id): # Отменить исхо�
     return status, message
 
 #Вообще эту функцию можно использовать еще как удаление из друзей!
-async def deny_request(token, user2_id): # Отклонение запроса в друзья -- переделано: nickname - это user_id второго польз.
+async def deny_request(token, user2_id): # Отклонение запроса в друзья
     global tokenManager
     status = True
     message = ''
@@ -383,13 +383,11 @@ async def get_friend_requests(token): # Загрузка списка входя
     try:
         if await tokenManager.read_dictionary(token):
             user_id = await tokenManager.get_user_id(token)
-            records = await connection.fetch('''SELECT "user".id AS user_id, nickname, picture.id AS picture_id, relation 
-                                                FROM tagme."user"
-                                                LEFT JOIN tagme.user_link ON tagme."user".id = tagme.user_link.user2_id 
-                                                    AND tagme.user_link.user1_id = $1
-                                                LEFT JOIN tagme.picture ON tagme."user".picture_id = tagme.picture.id
-                                                WHERE tagme.user_link.relation = 'incoming' OR tagme.user_link.relation = 'outgoing' 
-                                                ORDER BY nickname ASC''', user_id)
+            records = await connection.fetch('''SELECT "user".id AS user_id, nickname, picture.id AS picture_id, relation, FROM tagme."user"
+         LEFT JOIN tagme.user_link ON tagme."user".id = tagme.user_link.user2_id AND tagme.user_link.user1_id = $1
+         LEFT JOIN tagme.picture ON tagme."user".picture_id = tagme.picture.id
+WHERE tagme.user_link.relation = 'request_incoming' OR tagme.user_link.relation = 'request_outgoing'
+ORDER BY nickname ASC''', user_id)
             result = {"result": [{"user_id": record['user_id'], "nickname": record["nickname"],
                                   "picture_id": record['picture_id'], "relation": record["relation"]} for record in
                                  records]}
@@ -413,15 +411,16 @@ async def get_chats(token):    #Загрузка чатов
     try:
         if await tokenManager.read_dictionary(token):
             user_id = await tokenManager.get_user_id(token)
-            records = await connection.fetch('''SELECT conversation.id AS conversation_id, "user".id AS user_id, nickname,  picture.id AS profile_picture_id, author_id, text, message.picture_id AS msg_picture_id, read, message.timestamp AS timestamp FROM tagme.conversation
-    LEFT JOIN tagme."user" ON "user".id = conversation.user1_id OR "user".id = conversation.user2_id
-    LEFT JOIN tagme.picture ON tagme."user".picture_id = tagme.picture.id
-    LEFT JOIN tagme.message ON conversation.id = message.conversation_id
-WHERE (user1_id = $1 OR user2_id = $1) AND ("user".id != $1) AND (not exists(select * from tagme.message where conversation_id = conversation.id) OR (message.id = (select id from tagme.message where conversation_id = conversation.id order by id desc limit 1)))''', user_id)
+            records = await connection.fetch('''SELECT conversation.id AS conversation_id, "user".id AS user_id, nickname,  picture.id AS profile_picture_id, author_id, text, message.id AS last_message_id, message.picture_id AS msg_picture_id, read, message.timestamp AS timestamp FROM tagme.conversation
+LEFT JOIN tagme."user" ON "user".id = conversation.user1_id OR "user".id = conversation.user2_id
+LEFT JOIN tagme.picture ON tagme."user".picture_id = tagme.picture.id
+LEFT JOIN tagme.message ON conversation.id = message.conversation_id
+WHERE (user1_id = $1 OR user2_id = $1) AND ("user".id != $1) AND (not exists(select * from tagme.message where conversation_id = conversation.id) OR (message.id = (select id from tagme.message where conversation_id = conversation.id order by id desc limit 1)))
+''', user_id)
             result = {"result": [{"conversation_id": record['conversation_id'], "user_id": record['user_id'],
                                   "author_id": record["author_id"], "nickname": record['nickname'],
                                   "profile_picture_id": record['profile_picture_id'],
-                                  "text": record["text"], "msg_picture_id": record["msg_picture_id"],
+                                  "text": record["text"], "last_message_id": record["last_message_id"], "msg_picture_id": record["msg_picture_id"],
                                   "read": record["read"], "timestamp": record["timestamp"].isoformat() if record["timestamp"] else None} for record in records]}
             status = True
             message = json.dumps(result)
@@ -630,7 +629,6 @@ values ($1) RETURNING id''', bytearray(picture, encoding="utf-8"))
     finally:
         await connection.close()
     return status, message
-
 async def load_profile(token, profile_user_id):
     global tokenManager
     status = True
@@ -667,13 +665,60 @@ async def load_profile(token, profile_user_id):
 
             friend_count = await connection.fetchval('''SELECT count(user2_id) from tagme.user_link where user1_id = $1 AND relation = \'friend\'''', profile_user_id)
 
-            records = await connection.fetchrow('''SELECT nickname, picture_id, date_linked from tagme."user", tagme.user_link
-where "user".id = $2 AND user_link.user1_id = $1 AND user2_id = $2''',user_id ,profile_user_id)
+            records = await connection.fetchrow('''SELECT nickname, picture_id, date_linked from tagme."user"
+    LEFT JOIN tagme.user_link ON user1_id = $1 AND user2_id = $2 
+where "user".id = $2''',user_id ,profile_user_id)
 
-            result = {"nickname": records["nickname"], "picture_id": records["picture_id"], "relation" : relation, "friend_count" : friend_count, "date_linked" : records["date_linked"].isoformat() if records["date_linked"] else None}
+            result = {"nickname": records["nickname"], "picture_id": records["picture_id"], "relation" : relation if relation else None, "friend_count" : friend_count, "date_linked" : records["date_linked"].isoformat() if records["date_linked"] else None}
 
             status = True
             message = json.dumps(result)
+        else:
+            status = False
+            message = 'invalid token'
+    except:
+        message = str(sys.exc_info()[1])
+        status = False
+    finally:
+        await connection.close()
+    return status, message
+async def delete_friend(token, user2_id):       #Удаление пользователя user2_id из друзей
+    global tokenManager
+    status = True
+    message = ''
+    connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
+                                       host='141.8.193.201')
+    try:
+        if await tokenManager.read_dictionary(token):
+            user_id = await tokenManager.get_user_id(token)
+            await connection.execute('''UPDATE tagme."user"
+            SET picture_id = $2
+            WHERE id = $1''', user_id, user2_id)
+            status = True
+            message = "success"
+        else:
+            status = False
+            message = 'invalid token'
+    except:
+        message = str(sys.exc_info()[1])
+        status = False
+    finally:
+        await connection.close()
+    return status, message
+async def block_user(token, user2_id):       #Удаление пользователя user2_id из друзей
+    global tokenManager
+    status = True
+    message = ''
+    connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
+                                       host='141.8.193.201')
+    try:
+        if await tokenManager.read_dictionary(token):
+            user_id = await tokenManager.get_user_id(token)
+            await connection.execute('''UPDATE tagme."user"
+            SET picture_id = $2
+            WHERE id = $1''', user_id, user2_id)
+            status = True
+            message = "success"
         else:
             status = False
             message = 'invalid token'
@@ -783,6 +828,14 @@ async def Websocket(websocket, path):
                 token = user_data.get('token')
                 nickname = user_data.get('nickname')
                 status, message = await add_friend(token, nickname)
+            case "delete friend":
+                token = user_data.get('token')
+                user2_id = user_data.get('user2_id')
+                status, message = await delete_friend(token, user2_id)
+            case "block user":
+                token = user_data.get('token')
+                user2_id = user_data.get('user2_id')
+                status, message = await block_user(token, user2_id)
             case "accept request":
                 token = user_data.get('token')
                 user2_id = user_data.get('user2_id')
