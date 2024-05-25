@@ -8,7 +8,6 @@ import datetime
 import base64
 
 class TokenManager:
-
     def __init__(self):
         self.dictionary_token = {}
         self._lock = asyncio.Lock()
@@ -279,7 +278,6 @@ async def add_friend(token, nickname): #Отправка заявки в дру�
     finally:
         await connection.close()
     return status, message
-
 async def get_picture(token, picture_id):   # Загрузка картинки
     global tokenManager
     status = True
@@ -302,7 +300,6 @@ async def get_picture(token, picture_id):   # Загрузка картинки
     finally:
         await connection.close()
     return status, message
-
 async def get_my_data(token):   # Получение данных пользователя(по токену)
     global tokenManager
     status = True
@@ -383,14 +380,13 @@ async def get_friend_requests(token): # Загрузка списка входя
     try:
         if await tokenManager.read_dictionary(token):
             user_id = await tokenManager.get_user_id(token)
-            records = await connection.fetch('''SELECT "user".id AS user_id, nickname, picture.id AS picture_id, relation, FROM tagme."user"
+            records = await connection.fetch('''SELECT "user".id AS user_id, nickname, picture.id AS picture_id, relation FROM tagme."user"
          LEFT JOIN tagme.user_link ON tagme."user".id = tagme.user_link.user2_id AND tagme.user_link.user1_id = $1
          LEFT JOIN tagme.picture ON tagme."user".picture_id = tagme.picture.id
 WHERE tagme.user_link.relation = 'request_incoming' OR tagme.user_link.relation = 'request_outgoing'
 ORDER BY nickname ASC''', user_id)
             result = {"result": [{"user_id": record['user_id'], "nickname": record["nickname"],
-                                  "picture_id": record['picture_id'], "relation": record["relation"]} for record in
-                                 records]}
+                                  "picture_id": record['picture_id'], "relation": record["relation"]} for record in records]}
             status = True
             message = json.dumps((result))
         else:
@@ -691,9 +687,9 @@ async def delete_friend(token, user2_id):       #Удаление пользов
     try:
         if await tokenManager.read_dictionary(token):
             user_id = await tokenManager.get_user_id(token)
-            await connection.execute('''UPDATE tagme."user"
-            SET picture_id = $2
-            WHERE id = $1''', user_id, user2_id)
+            await connection.execute('''UPDATE tagme.user_link
+SET relation = 'default'
+WHERE (user1_id = $1 and user2_id = $2) or (user1_id = $2 and user2_id = $1)''', user_id, user2_id)
             status = True
             message = "success"
         else:
@@ -714,9 +710,32 @@ async def block_user(token, user2_id):       #Удаление пользова�
     try:
         if await tokenManager.read_dictionary(token):
             user_id = await tokenManager.get_user_id(token)
-            await connection.execute('''UPDATE tagme."user"
-            SET picture_id = $2
-            WHERE id = $1''', user_id, user2_id)
+            await connection.execute('''UPDATE tagme.user_link
+SET relation = 'blocked'
+WHERE (user1_id = $1 and user2_id = $2)''', user_id, user2_id)
+            status = True
+            message = "success"
+        else:
+            status = False
+            message = 'invalid token'
+    except:
+        message = str(sys.exc_info()[1])
+        status = False
+    finally:
+        await connection.close()
+    return status, message
+async def unblock_user(token, user2_id):       #Удаление пользователя user2_id из друзей
+    global tokenManager
+    status = True
+    message = ''
+    connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
+                                       host='141.8.193.201')
+    try:
+        if await tokenManager.read_dictionary(token):
+            user_id = await tokenManager.get_user_id(token)
+            await connection.execute('''UPDATE tagme.user_link
+SET relation = 'default'
+WHERE (user1_id = $1 and user2_id = $2)''', user_id, user2_id)
             status = True
             message = "success"
         else:
@@ -836,6 +855,10 @@ async def Websocket(websocket, path):
                 token = user_data.get('token')
                 user2_id = user_data.get('user2_id')
                 status, message = await block_user(token, user2_id)
+            case "unblock user":
+                token = user_data.get('token')
+                user2_id = user_data.get('user2_id')
+                status, message = await unblock_user(token, user2_id)
             case "accept request":
                 token = user_data.get('token')
                 user2_id = user_data.get('user2_id')
