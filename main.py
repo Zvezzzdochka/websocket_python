@@ -97,7 +97,6 @@ async def login_token(token): #Вход по токену
         status = False
         message = 'error'
     return status, message
-
 async def send_location(token, latitude, longitude, accuracy, speed, timestamp): #Обновление location пользователя
     global tokenManager
     status = True
@@ -118,7 +117,6 @@ async def send_location(token, latitude, longitude, accuracy, speed, timestamp):
     finally:
         await connection.close()
     return status, message
-
 async def get_friends(token): # Получение списка друзей
     global tokenManager
     status = True
@@ -511,11 +509,22 @@ async def send_message(token, conversation_id, text, picture_id):   #Отпра�
     try:
         if await tokenManager.read_dictionary(token):
             user_id = await tokenManager.get_user_id(token)
-            await connection.fetch(
-                '''INSERT INTO tagme.message (conversation_id, author_id, text, picture_id, read, timestamp)
-VALUES ($1, $2, $3, $4, FALSE, $5)''', conversation_id, user_id, text, picture_id, datetime.datetime.now())
-            status = True
-            message = "success"
+            blocked = await connection.fetchval('''SELECT CASE
+           WHEN EXISTS (SELECT *
+                        FROM tagme.user_link
+                        WHERE ((user1_id = $1 AND user2_id = (SELECT user2_id FROM tagme.conversation WHERE (user1_id = $1 OR user2_id = $1) AND conversation.id = $2) AND relation = 'blocked')
+                            OR (user2_id = $1 AND user1_id = (SELECT user1_id FROM tagme.conversation WHERE (user1_id = $1 OR user2_id = $1) AND conversation.id = $2) AND relation = 'blocked')
+                            OR (user1_id = (SELECT user2_id FROM tagme.conversation WHERE (user1_id = $1 OR user2_id = $1) AND conversation.id = $2) AND user2_id = $1 AND relation = 'blocked')
+                            OR (user2_id = (SELECT user1_id FROM tagme.conversation WHERE (user1_id = $1 OR user2_id = $1) AND conversation.id = $2) AND user1_id = $1 AND relation = 'blocked'))) THEN 'TRUE'
+           ELSE 'FALSE'
+           END AS result''', user_id, conversation_id)
+            if blocked == 'FALSE':
+                await connection.fetch(
+                    '''INSERT INTO tagme.message (conversation_id, author_id, text, picture_id, read, timestamp)
+    VALUES ($1, $2, $3, $4, FALSE, $5)''', conversation_id, user_id, text, picture_id, datetime.datetime.now())
+                message = "success"
+            else:
+                message = "you cannot"
         else:
             status = False
             message = 'invalid token'
@@ -560,10 +569,26 @@ async def get_geo_stories(token):
             records = await connection.fetch(
                 '''SELECT geo_story.id AS geo_story_id, geo_story.timestamp, geo_story.picture_id, geo_story.views,geo_story.latitude, geo_story.longitude, geo_story.creator_id, nickname, "user".picture_id AS profile_picture_id, geo_story.privacy FROM tagme.geo_story
     LEFT JOIN tagme.location ON tagme.location.user_id = $1
-    LEFT JOIN tagme.user_link ON tagme.user_link.user1_id = creator_id AND tagme.user_link.user2_id = $1
+    LEFT JOIN tagme.user_link AS user_link_to_user ON user_link_to_user.user1_id = creator_id AND user_link_to_user.user2_id = $1
+    LEFT JOIN tagme.user_link AS user_link_from_user ON user_link_from_user.user1_id = $1 AND user_link_from_user.user2_id = creator_id
     LEFT JOIN tagme.user ON tagme."user".id = geo_story.creator_id
-WHERE ((tagme.geo_story.timestamp::timestamptz > now() - interval '21 hour') AND (((acos(sin(radians(tagme.location.latitude))*sin(radians(geo_story.latitude))+cos(radians(tagme.location.latitude))*cos(radians(geo_story.latitude))*cos(radians(geo_story.longitude)-radians(tagme.location.longitude)))*6371) < 0.7 AND privacy = 'global')
-    OR (tagme.user_link.relation = 'friend') OR (creator_id = $1)))''', user_id)
+WHERE ((tagme.geo_story.timestamp::timestamptz > now() - interval '21 hour') AND (
+    (
+        (
+            acos(
+                    least(
+                            greatest(
+                                    sin(radians(tagme.location.latitude)) * sin(radians(geo_story.latitude)) +
+                                    cos(radians(tagme.location.latitude)) * cos(radians(geo_story.latitude)) *
+                                    cos(radians(geo_story.longitude) - radians(tagme.location.longitude)),
+                                    -1.0
+                            ),
+                            1.0
+                    )
+            ) * 6371
+            ) < 100 AND privacy = 'global' AND ((user_link_to_user IS NULL OR user_link_to_user.relation != 'blocked') AND (user_link_from_user IS NULL OR user_link_from_user.relation != 'blocked')))
+        OR (user_link_to_user.relation = 'friend') OR (creator_id = $1)))''', user_id)
+            #distance = 0.7
             result = {"result": [{"geo_story_id": record["geo_story_id"], "timestamp": record["timestamp"].isoformat(), "views":record["views"],
                                   "picture_id": record["picture_id"], "creator_id": record["creator_id"], "latitude": record["latitude"],
                                   "longitude": record["longitude"], "nickname": record["nickname"], "profile_picture_id":record["profile_picture_id"],
@@ -710,9 +735,7 @@ async def block_user(token, user2_id):       #Удаление пользова�
     try:
         if await tokenManager.read_dictionary(token):
             user_id = await tokenManager.get_user_id(token)
-            await connection.execute('''UPDATE tagme.user_link
-SET relation = 'blocked'
-WHERE (user1_id = $1 and user2_id = $2)''', user_id, user2_id)
+            await connection.execute("CALL tagme.block_user($1, $2)", str(user_id), str(user2_id))
             status = True
             message = "success"
         else:
