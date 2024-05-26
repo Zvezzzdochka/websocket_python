@@ -8,29 +8,48 @@ import datetime
 import base64
 
 class TokenManager:
-    def __init__(self):
+    def __init__(self, filename="/home/vgtbl/src/tokens.json"):
+        self.filename = filename
         self.dictionary_token = {}
         self._lock = asyncio.Lock()
-    async def generate_token(self): # Генерация токена
-        async with self._lock:
-            return secrets.token_urlsafe(16)
+        self.load_tokens()
 
-    async def write_dictionary(self, user_id, token): # Запись токена
+    def load_tokens(self):
+        try:
+            with open(self.filename, "r") as f:
+                self.dictionary_token = json.load(f)
+        except FileNotFoundError:
+            pass
+
+    def save_tokens(self):
+        with open(self.filename, "w") as f:
+            json.dump(self.dictionary_token, f)
+
+    async def generate_token(self):
+        async with self._lock:
+            token = secrets.token_urlsafe(16)
+            return token
+
+    async def write_dictionary(self, user_id, token):
         async with self._lock:
             self.dictionary_token[user_id] = token
             self.dictionary_token[token] = user_id
+            self.save_tokens()
 
-    async def read_dictionary(self, user_id): # Проверка наличия id (или токена)
+    async def read_dictionary(self, user_id):
         async with self._lock:
             return user_id in self.dictionary_token
 
     async def get_user_id(self, token):
         async with self._lock:
-            return self.dictionary_token[token]
+            return self.dictionary_token.get(token)
 
     async def pop_dictionary(self, user_id):
         async with self._lock:
-            self.dictionary_token.pop(self.dictionary_token[user_id])
+            if user_id in self.dictionary_token:
+                token = self.dictionary_token.pop(user_id)
+                self.dictionary_token.pop(token)
+                self.save_tokens()
 
 tokenManager = TokenManager()
 async def register_user(username, password): # Регистрация пользователя
@@ -677,11 +696,7 @@ async def load_profile(token, profile_user_id):
             if you_block_user == 'TRUE':
                 relation = 'block_outgoing'
 
-            both_blocked = await connection.fetchval('''SELECT CASE
-           WHEN EXISTS (SELECT * FROM tagme.user_link WHERE ((user1_id = $1 AND user2_id = $2) AND (user1_id = $2 AND user2_id = $1) AND relation = 'blocked')) THEN 'TRUE'
-           ELSE 'FALSE'
-           END AS result''', user_id, profile_user_id)
-            if both_blocked == 'TRUE':
+            if (you_block_user == 'TRUE' and blocked_by_user2 == 'TRUE'):
                 relation = 'block_mutual'
 
             friend_count = await connection.fetchval('''SELECT count(user2_id) from tagme.user_link where user1_id = $1 AND relation = \'friend\'''', profile_user_id)
