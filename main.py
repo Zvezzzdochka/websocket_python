@@ -326,8 +326,10 @@ async def get_my_data(token):   # Получение данных пользов
     try:
         if await tokenManager.read_dictionary(token):
             user_id = await tokenManager.get_user_id(token)
-            records = await connection.fetch('''SELECT id, "user".picture_id FROM tagme."user" WHERE id = $1''', user_id)
-            result = {"result": [{"user_id": record["id"], "picture_id": record["picture_id"]} for record in records]}
+            records = await connection.fetchrow('''SELECT "user".id, "user".picture_id, user_score FROM tagme."user"
+                             LEFT JOIN tagme.rating ON user_id = $1
+                             WHERE "user".id = $1''', user_id)
+            result = {"user_id": records["id"], "picture_id": records["picture_id"], "user_score": records["user_score"]}
             status = True
             message = json.dumps(result)
         else:
@@ -635,6 +637,7 @@ async def add_view_to_geo_story(token, geo_story_id):
             await connection.execute('''UPDATE tagme.geo_story
 set views = views + 1
 where id = $1''', geo_story_id)
+            await connection.execute('''UPDATE tagme.rating set user_score = user_score + 1 where user_id = (select creator_id from tagme.geo_story where id = $1)''', geo_story_id)
             status = True
             message = "success"
         else:
@@ -701,11 +704,13 @@ async def load_profile(token, profile_user_id):
 
             friend_count = await connection.fetchval('''SELECT count(user2_id) from tagme.user_link where user1_id = $1 AND relation = \'friend\'''', profile_user_id)
 
-            records = await connection.fetchrow('''SELECT nickname, picture_id, date_linked from tagme."user"
-    LEFT JOIN tagme.user_link ON user1_id = $1 AND user2_id = $2 
+            records = await connection.fetchrow('''SELECT nickname, picture_id, date_linked, user_score from tagme."user"
+    LEFT JOIN tagme.user_link ON user1_id = $1 AND user2_id = $2
+    LEFT JOIN tagme.rating ON user_id = $2
 where "user".id = $2''',user_id ,profile_user_id)
 
-            result = {"nickname": records["nickname"], "picture_id": records["picture_id"], "relation" : relation if relation else None, "friend_count" : friend_count, "date_linked" : records["date_linked"].isoformat() if records["date_linked"] else None}
+            result = {"nickname": records["nickname"], "picture_id": records["picture_id"], "relation" : relation if relation else None, "friend_count" : friend_count,
+                      "user_score" : records["user_score"], "date_linked" : records["date_linked"].isoformat() if records["date_linked"] else None}
 
             status = True
             message = json.dumps(result)
@@ -865,11 +870,9 @@ async def Websocket(websocket, path):
             case "validate token":
                 token = user_data.get('token')
                 status, message = await login_token(token)
-
             case "get friends":
                 token = user_data.get('token')
                 status, message = await get_friends(token)
-
             case "send location":
                 token = user_data.get('token')
                 latitude = float(user_data.get('latitude'))
@@ -973,6 +976,5 @@ async def Websocket(websocket, path):
 
 
 start_server = websockets.serve(Websocket, '141.8.193.201', 8765)  # Запуск WebSocket сервера на localhost и порту 8765
-#rating_update_task(86400)
 asyncio.get_event_loop().run_until_complete(start_server)  # Запуск сервера и ожидание его завершения
 asyncio.get_event_loop().run_forever()  # Бесконечный цикл для работы WebSocket сервера
