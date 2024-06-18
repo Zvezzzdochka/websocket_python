@@ -141,13 +141,16 @@ async def change_nickname(token, newUserName):
                 newUserName)
             if result == 'FALSE':
                 await connection.execute('''update tagme."user"
-set nickname = '$2
+set nickname = $2
 where id = $1''', user_id, newUserName)
                 status = True
                 message = 'success'
             else:
                 status = False
                 message = 'username already exists'
+        else:
+            status = False
+            message = 'invalid token'
     except:
         message = str(sys.exc_info()[1])
         status = False
@@ -942,7 +945,7 @@ async def Websocket(websocket, path):
                     if (len(password) < 8):
                         error_list.append('too short')
                         status = False
-                    if (len(username) > 14):
+                    if (len(username) > 19):
                         error_list.append('login too long')
                         status = False
                     if (len(password) > 19):
@@ -969,8 +972,12 @@ async def Websocket(websocket, path):
                 status, message = await auth_vk(access_token)
             case "change nickname":
                 token = user_data.get('token')
-                newUserName = user_data.get('')
-                status, message = await change_nickname(token, newUserName)
+                newUserName = user_data.get('nickname')
+                if len(newUserName) > 80:
+                    status = False
+                    message = "nickname too long"
+                else:
+                    status, message = await change_nickname(token, newUserName)
             case "validate token":
                 token = user_data.get('token')
                 status, message = await login_token(token)
