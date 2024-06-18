@@ -1,10 +1,12 @@
 import asyncio
+import aiohttp
 import websockets
 import json
 import asyncpg  # Импорт библиотеки для работы с PostgreSQL
 import sys
 import secrets
 import datetime
+import vb_vkAPI
 import base64
 
 class TokenManager:
@@ -75,6 +77,77 @@ VALUES($1, 0, 0) ON CONFLICT (user_id) DO NOTHING''', id)
         else:
             status = False
             message = 'username already exists'
+    except:
+        message = str(sys.exc_info()[1])
+        status = False
+    finally:
+        await connection.close()
+    return status, message
+async def auth_vk(access_token): # Регистрация пользователя ВК
+    global tokenManager
+    status = True
+    message = ''
+    user = await vb_vkAPI.get_user_data(access_token)
+    if isinstance(user, vb_vkAPI.User):
+        username = f"{user.first_name} {user.last_name} {user.id}"
+    connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable', host='141.8.193.201')
+    try:
+        result = await connection.fetchval('''SELECT CASE WHEN EXISTS (SELECT * FROM tagme."user" WHERE nickname = $1) THEN 'TRUE' ELSE 'FALSE' END AS result''', username)
+        if result == 'FALSE':
+            token = await tokenManager.generate_token()
+            picture_status,picture_message = await download_picture(user.photo_200)
+            picture_id = 0
+            if picture_status:
+                picture_id = int(picture_message)
+
+            id_string = await connection.fetchval('INSERT INTO tagme."user" (nickname, picture_id) VALUES($1,$2) returning id', username, picture_id)
+            id = int(id_string)
+
+            # ------------------------------Рейтинг!!!!--------------------
+            await connection.execute('''INSERT INTO tagme.rating (user_id, user_score, place)
+VALUES($1, 0, 0) ON CONFLICT (user_id) DO NOTHING''', id)
+            # ------------------------------Рейтинг!!!!--------------------
+
+            await tokenManager.write_dictionary(id, token)
+            status = True
+            message = token
+        else:
+            result = await connection.fetchval(
+                '''select id from tagme."user" WHERE nickname = $1''', username)
+            token = await tokenManager.generate_token()
+            result_id = int(result)
+            if await tokenManager.read_dictionary(result_id):
+                await tokenManager.pop_dictionary(result_id)
+            await tokenManager.write_dictionary(result_id, token)
+            status = True
+            message = token
+    except:
+        message = str(sys.exc_info()[1])
+        status = False
+    finally:
+        await connection.close()
+    return status, message
+async def change_nickname(token, newUserName):
+    global tokenManager
+    status = True
+    message = ''
+    connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
+                                       host='141.8.193.201')
+    try:
+        if await tokenManager.read_dictionary(token):
+            user_id = await tokenManager.get_user_id(token)
+            result = await connection.fetchval(
+                '''SELECT CASE WHEN EXISTS (SELECT * FROM tagme."user" WHERE nickname = $1) THEN 'TRUE' ELSE 'FALSE' END AS result''',
+                newUserName)
+            if result == 'FALSE':
+                await connection.execute('''update tagme."user"
+set nickname = '$2
+where id = $1''', user_id, newUserName)
+                status = True
+                message = 'success'
+            else:
+                status = False
+                message = 'username already exists'
     except:
         message = str(sys.exc_info()[1])
         status = False
@@ -326,10 +399,10 @@ async def get_my_data(token):   # Получение данных пользов
     try:
         if await tokenManager.read_dictionary(token):
             user_id = await tokenManager.get_user_id(token)
-            records = await connection.fetchrow('''SELECT "user".id, "user".picture_id, user_score FROM tagme."user"
-                             LEFT JOIN tagme.rating ON user_id = $1
-                             WHERE "user".id = $1''', user_id)
-            result = {"user_id": records["id"], "picture_id": records["picture_id"], "user_score": records["user_score"]}
+            records = await connection.fetchrow('''SELECT "user".id, "user".nickname, "user".picture_id, user_score FROM tagme."user"
+    LEFT JOIN tagme.rating ON user_id = $1
+WHERE "user".id = $1''', user_id)
+            result = {"user_id": records["id"], "nickname": records["nickname"], "picture_id": records["picture_id"], "user_score": records["user_score"]}
             status = True
             message = json.dumps(result)
         else:
@@ -365,7 +438,6 @@ async def cancel_outgoing_request(token, user2_id): # Отменить исхо�
     finally:
         await connection.close()
     return status, message
-
 #Вообще эту функцию можно использовать еще как удаление из друзей!
 async def deny_request(token, user2_id): # Отклонение запроса в друзья
     global tokenManager
@@ -379,6 +451,9 @@ async def deny_request(token, user2_id): # Отклонение запроса �
             await connection.execute('''UPDATE tagme.user_link 
 SET relation = 'default'
 WHERE (user1_id = $1 and user2_id = $2) or (user1_id = $2 and user2_id = $1)''', user_id, user2_id)
+            await connection.execute('''UPDATE tagme.rating
+            SET user_score = user_score - 1
+            where user_id = $1 OR user_id = $2''', user_id, user2_id)
             status = True
             message = 'success'
         else:
@@ -567,6 +642,9 @@ async def create_geo_story(token, privacy, picture_id, latitude, longitude):
             await connection.execute(
                 '''INSERT INTO tagme.geo_story (creator_id, privacy, picture_id, views, latitude, longitude, timestamp)
 VALUES($1, $2, $3, 0, $4, $5, $6)''', user_id, privacy, picture_id, latitude, longitude, datetime.datetime.now())
+            await connection.execute('''UPDATE tagme.rating
+            SET user_score = user_score + 1
+            where user_id = $1''', user_id)
             status = True
             message = "success"
         else:
@@ -607,9 +685,8 @@ WHERE ((tagme.geo_story.timestamp::timestamptz > now() - interval '21 hour') AND
                             1.0
                     )
             ) * 6371
-            ) < 100 AND privacy = 'global' AND ((user_link_to_user IS NULL OR user_link_to_user.relation != 'blocked') AND (user_link_from_user IS NULL OR user_link_from_user.relation != 'blocked')))
+            ) < 0.7 AND privacy = 'global' AND ((user_link_to_user IS NULL OR user_link_to_user.relation != 'blocked') AND (user_link_from_user IS NULL OR user_link_from_user.relation != 'blocked')))
         OR (user_link_to_user.relation = 'friend') OR (creator_id = $1)))''', user_id)
-            #distance = 0.7
             result = {"result": [{"geo_story_id": record["geo_story_id"], "timestamp": record["timestamp"].isoformat(), "views":record["views"],
                                   "picture_id": record["picture_id"], "creator_id": record["creator_id"], "latitude": record["latitude"],
                                   "longitude": record["longitude"], "nickname": record["nickname"], "profile_picture_id":record["profile_picture_id"],
@@ -666,6 +743,26 @@ values ($1) RETURNING id''', bytearray(picture, encoding="utf-8"))
         else:
             status = False
             message = 'invalid token'
+    except:
+        message = str(sys.exc_info()[1])
+        status = False
+    finally:
+        await connection.close()
+    return status, message
+async def download_picture(url):
+    status = True
+    message = ''
+    connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
+                                       host='141.8.193.201')
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                image_content = await response.read()
+                base64_image = base64.b64encode(image_content)
+                result = await connection.fetchval(
+                    '''INSERT INTO tagme.picture (picture) values ($1) RETURNING id''', base64_image)
+            status = True
+            message = result
     except:
         message = str(sys.exc_info()[1])
         status = False
@@ -867,6 +964,13 @@ async def Websocket(websocket, path):
                 username = user_data.get('username')
                 password = user_data.get('password')
                 status, message = await login_user(username, password)
+            case "auth vk":
+                access_token = user_data.get('access_token')
+                status, message = await auth_vk(access_token)
+            case "change nickname":
+                token = user_data.get('token')
+                newUserName = user_data.get('')
+                status, message = await change_nickname(token, newUserName)
             case "validate token":
                 token = user_data.get('token')
                 status, message = await login_token(token)
