@@ -8,6 +8,7 @@ import secrets
 import datetime
 import vb_vkAPI
 import base64
+import bcrypt
 
 class TokenManager:
     def __init__(self, filename="/home/vgtbl/src/tokens.json"):
@@ -28,12 +29,16 @@ class TokenManager:
             json.dump(self.dictionary_token, f)
 
     async def generate_token(self):
-        async with self._lock:
-            token = secrets.token_urlsafe(16)
-            return token
+        token = secrets.token_urlsafe(16)
+        return token
 
     async def write_dictionary(self, user_id, token):
         async with self._lock:
+            # Удаление старого токена, если он существует
+            if user_id in self.dictionary_token:
+                old_token = self.dictionary_token[user_id]
+                self.dictionary_token.pop(old_token, None)
+            # Запись нового токена
             self.dictionary_token[user_id] = token
             self.dictionary_token[token] = user_id
             self.save_tokens()
@@ -50,7 +55,7 @@ class TokenManager:
         async with self._lock:
             if user_id in self.dictionary_token:
                 token = self.dictionary_token.pop(user_id)
-                self.dictionary_token.pop(token)
+                self.dictionary_token.pop(token, None)
                 self.save_tokens()
 
 tokenManager = TokenManager()
@@ -63,12 +68,15 @@ async def register_user(username, password): # Регистрация польз
         result = await connection.fetchval('''SELECT CASE WHEN EXISTS (SELECT * FROM tagme."user" WHERE nickname = $1) THEN 'TRUE' ELSE 'FALSE' END AS result''', username)
         if result == 'FALSE':
             token = await tokenManager.generate_token()
-            id_string = await connection.fetchval('INSERT INTO tagme."user" (nickname, password) VALUES($1, $2) returning id', username, password)
+            bytes_password = password.encode('utf-8')
+            salt = bcrypt.gensalt()
+            hash = bcrypt.hashpw(bytes_password, salt)
+            id_string = await connection.fetchval('INSERT INTO tagme."user" (nickname, salt, hash) VALUES($1, $2, $3) returning id', username, salt.decode('utf-8'), hash.decode('utf-8'))
             id = int(id_string)
 
             # ------------------------------Рейтинг!!!!--------------------
             await connection.execute('''INSERT INTO tagme.rating (user_id, user_score, place)
-VALUES($1, 0, 0) ON CONFLICT (user_id) DO NOTHING''', id)
+VALUES($1, 0, (select max(place) from tagme.rating)+1) ON CONFLICT (user_id) DO NOTHING''', id)
             # ------------------------------Рейтинг!!!!--------------------
 
             await tokenManager.write_dictionary(id, token)
@@ -90,9 +98,11 @@ async def auth_vk(access_token): # Регистрация пользовател
     user = await vb_vkAPI.get_user_data(access_token)
     if isinstance(user, vb_vkAPI.User):
         username = f"{user.first_name} {user.last_name} {user.id}"
+    else:
+        username = ""
     connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable', host='141.8.193.201')
     try:
-        result = await connection.fetchval('''SELECT CASE WHEN EXISTS (SELECT * FROM tagme."user" WHERE nickname = $1) THEN 'TRUE' ELSE 'FALSE' END AS result''', username)
+        result = await connection.fetchval('''SELECT CASE WHEN EXISTS (SELECT * FROM tagme."user" WHERE vk_id = $1) THEN 'TRUE' ELSE 'FALSE' END AS result''', str(user.id))
         if result == 'FALSE':
             token = await tokenManager.generate_token()
             picture_status,picture_message = await download_picture(user.photo_200)
@@ -100,12 +110,12 @@ async def auth_vk(access_token): # Регистрация пользовател
             if picture_status:
                 picture_id = int(picture_message)
 
-            id_string = await connection.fetchval('INSERT INTO tagme."user" (nickname, picture_id) VALUES($1,$2) returning id', username, picture_id)
+            id_string = await connection.fetchval('INSERT INTO tagme."user" (nickname, vk_id, picture_id) VALUES($1, $2, $3) returning id', username, str(user.id), picture_id)
             id = int(id_string)
 
             # ------------------------------Рейтинг!!!!--------------------
-            await connection.execute('''INSERT INTO tagme.rating (user_id, user_score, place)
-VALUES($1, 0, 0) ON CONFLICT (user_id) DO NOTHING''', id)
+            await connection.execute('''INSERT INTO tagme.rating (user_id, user_score, place) 
+            VALUES($1, 0, (select max(place) from tagme.rating)+1) ON CONFLICT (user_id) DO NOTHING''', id)
             # ------------------------------Рейтинг!!!!--------------------
 
             await tokenManager.write_dictionary(id, token)
@@ -113,11 +123,11 @@ VALUES($1, 0, 0) ON CONFLICT (user_id) DO NOTHING''', id)
             message = token
         else:
             result = await connection.fetchval(
-                '''select id from tagme."user" WHERE nickname = $1''', username)
+                '''select id from tagme."user" WHERE vk_id = $1''', str(user.id))
             token = await tokenManager.generate_token()
             result_id = int(result)
-            if await tokenManager.read_dictionary(result_id):
-                await tokenManager.pop_dictionary(result_id)
+#            if await tokenManager.read_dictionary(result_id):
+#                await tokenManager.pop_dictionary(result_id)
             await tokenManager.write_dictionary(result_id, token)
             status = True
             message = token
@@ -163,15 +173,22 @@ async def login_user(username, password): # Вход пользователя
     message = ''
     connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable', host='141.8.193.201')
     try:
-        result = await connection.fetchval('''SELECT CASE WHEN EXISTS (SELECT * FROM tagme."user" WHERE nickname = $1 AND password = $2) THEN (select id from tagme."user" WHERE nickname = $1 AND password = $2)::varchar(10) ELSE 'FALSE' END AS result''', username, password)
+        bytes_password = password.encode('utf-8')
+        salt = await connection.fetchval('''SELECT CASE WHEN EXISTS (SELECT * FROM tagme."user" WHERE nickname = $1)
+    THEN (SELECT salt from tagme."user" where nickname = $1) ELSE 'FALSE' END AS result''', username)
+        hash_decode = ""
+        if salt != 'FALSE':
+            hash = bcrypt.hashpw(bytes_password, bytearray(salt, encoding="utf-8"))
+            hash_decode = hash.decode('utf-8')
+        result = await connection.fetchval('''SELECT CASE WHEN EXISTS (SELECT * FROM tagme."user" WHERE nickname = $1 AND hash = $2) THEN (select id from tagme."user" WHERE nickname = $1 AND hash = $2)::varchar(10) ELSE 'FALSE' END AS result''', username, hash_decode)
         if result == 'FALSE':
             status = False
             message = 'failed'
         else:
             token = await tokenManager.generate_token()
             result_id = int(result)
-            if await tokenManager.read_dictionary(result_id):
-                await tokenManager.pop_dictionary(result_id)
+#            if await tokenManager.read_dictionary(result_id):
+#                await tokenManager.pop_dictionary(result_id)
             await tokenManager.write_dictionary(result_id, token)
             status = True
             message = token
@@ -402,10 +419,10 @@ async def get_my_data(token):   # Получение данных пользов
     try:
         if await tokenManager.read_dictionary(token):
             user_id = await tokenManager.get_user_id(token)
-            records = await connection.fetchrow('''SELECT "user".id, "user".nickname, "user".picture_id, user_score FROM tagme."user"
-    LEFT JOIN tagme.rating ON user_id = $1
+            records = await connection.fetchrow('''SELECT "user".id, "user".nickname, "user".picture_id, show_nearby, user_score FROM tagme."user"
+LEFT JOIN tagme.rating ON user_id = $1
 WHERE "user".id = $1''', user_id)
-            result = {"user_id": records["id"], "nickname": records["nickname"], "picture_id": records["picture_id"], "user_score": records["user_score"]}
+            result = {"user_id": records["id"], "nickname": records["nickname"], "picture_id": records["picture_id"], "show_nearby": records["show_nearby"], "user_score": records["user_score"]}
             status = True
             message = json.dumps(result)
         else:
@@ -495,7 +512,7 @@ ORDER BY nickname ASC''', user_id)
     finally:
         await connection.close()
     return status, message
-async def get_chats(token):    #Загрузка чатов
+async def get_conversations(token):    #Загрузка чатов
     global tokenManager
     status = True
     message = ''
@@ -504,12 +521,47 @@ async def get_chats(token):    #Загрузка чатов
     try:
         if await tokenManager.read_dictionary(token):
             user_id = await tokenManager.get_user_id(token)
-            records = await connection.fetch('''SELECT conversation.id AS conversation_id, "user".id AS user_id, nickname,  picture.id AS profile_picture_id, author_id, text, message.id AS last_message_id, message.picture_id AS msg_picture_id, read, message.timestamp AS timestamp FROM tagme.conversation
-LEFT JOIN tagme."user" ON "user".id = conversation.user1_id OR "user".id = conversation.user2_id
-LEFT JOIN tagme.picture ON tagme."user".picture_id = tagme.picture.id
-LEFT JOIN tagme.message ON conversation.id = message.conversation_id
-WHERE (user1_id = $1 OR user2_id = $1) AND ("user".id != $1) AND (not exists(select * from tagme.message where conversation_id = conversation.id) OR (message.id = (select id from tagme.message where conversation_id = conversation.id order by id desc limit 1)))
-''', user_id)
+            records = await connection.fetch('''
+SELECT
+    conversation.id AS conversation_id,
+    "user".id AS user_id,
+    nickname,
+    picture.id AS profile_picture_id,
+    last_message.author_id,
+    last_message.text,
+    last_message.id AS last_message_id,
+    last_message.picture_id AS msg_picture_id,
+    last_message.read,
+    last_message.timestamp AS timestamp
+FROM
+    tagme.conversation
+        LEFT JOIN
+    tagme."user" ON "user".id = conversation.user1_id OR "user".id = conversation.user2_id
+        LEFT JOIN
+    tagme.picture ON "user".picture_id = picture.id
+        LEFT JOIN
+    (
+        SELECT
+            message.id,
+            message.conversation_id,
+            message.picture_id,
+            message.read,
+            message.timestamp,
+            message.text,
+            message.author_id
+        FROM
+            tagme.message
+        WHERE
+            message.id IN (
+                SELECT MAX(id)
+                FROM tagme.message
+                WHERE deleted = false
+                GROUP BY conversation_id
+            )
+    ) AS last_message ON conversation.id = last_message.conversation_id
+WHERE
+    (user1_id = $1 OR user2_id = $1)
+  AND "user".id != $1''', user_id)
             result = {"result": [{"conversation_id": record['conversation_id'], "user_id": record['user_id'],
                                   "author_id": record["author_id"], "nickname": record['nickname'],
                                   "profile_picture_id": record['profile_picture_id'],
@@ -535,26 +587,28 @@ async def get_messages(token, conversation_id, last_msg_id):    #Загрузк�
     try:
         if await tokenManager.read_dictionary(token):
             user_id = await tokenManager.get_user_id(token)
-            if last_msg_id == -1:
-                records = await connection.fetch('''SELECT * FROM (
-                  SELECT id, conversation_id, author_id, text, picture_id, read, timestamp
-                  FROM tagme.message
-                  WHERE conversation_id = $1
-                    AND id <= (SELECT id FROM tagme.message ORDER BY id DESC LIMIT 1)
-                  ORDER BY id DESC
-                  LIMIT 20
-              ) AS subquery
-ORDER BY id ASC''', conversation_id)
-                result = {"result": [{"message_id": record["id"], "conversation_id": record["conversation_id"],
-                                      "author_id": record["author_id"],
-                                      "text": record["text"], "picture_id": record["picture_id"], "read": record["read"],
-                                      "timestamp": record["timestamp"].isoformat()} for record in records]}
-            else:
-                records = await connection.fetch('select id, conversation_id, author_id ,text, picture_id, read, timestamp from tagme.message where (conversation_id = $1 and id <= $2) LIMIT 20',
-                                                 conversation_id, last_msg_id)
-                result = {"result": [{"message_id": record["id"], "conversation_id": record["conversation_id"], "author_id": record["author_id"],
-                                      "text": record["text"], "picture_id": record["picture_id"], "read": record["read"],
-                                      "timestamp": record["timestamp"].isoformat()} for record in records]}
+            records = await connection.fetch('''SELECT * FROM (
+                              SELECT id, author_id, text, picture_id, read, timestamp
+                              FROM tagme.message
+                              WHERE conversation_id = $1 AND deleted = false
+                                AND id <= (SELECT id FROM tagme.message ORDER BY id DESC LIMIT 1)
+                              ORDER BY id DESC
+                              LIMIT 20
+                          ) AS subquery
+            ORDER BY id ASC''', conversation_id)
+            result = {"conversation_id": conversation_id, "result": [{"message_id": record["id"],
+                                  "author_id": record["author_id"],
+                                  "text": record["text"], "picture_id": record["picture_id"], "read": record["read"],
+                                  "timestamp": record["timestamp"].isoformat()} for record in records]}
+#            if last_msg_id == -1:
+#
+#            else:
+#                records = await connection.fetch('''select id, conversation_id, author_id ,text, picture_id, read, timestamp from tagme.message
+#    where (conversation_id = $1 and deleted = false and id <= $2) LIMIT 20''',
+#                                                 conversation_id, last_msg_id)
+#                result = {"result": [{"message_id": record["id"], "conversation_id": record["conversation_id"], "author_id": record["author_id"],
+#                                      "text": record["text"], "picture_id": record["picture_id"], "read": record["read"],
+#                                      "timestamp": record["timestamp"].isoformat()} for record in records]}
             status = True
             message = json.dumps(result)
 
@@ -912,17 +966,206 @@ WHERE id = $1''', user_id, picture_id)
     finally:
         await connection.close()
     return status, message
-async def rating_update_task(update_interval):
-    while True:
-        connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable',
-                                           host='141.8.193.201')
-        await connection.execute('''UPDATE tagme.rating
-            SET place = (
-                SELECT COUNT(*) + 1
-                FROM tagme.rating AS r2
-                WHERE r2.user_score > rating.user_score
-            )''')
-        await asyncio.sleep(update_interval)  # Wait for the specified interval
+async def read_conversation(token, conversation_id): # получение локации друзей
+    global tokenManager
+    status = True
+    message = ''
+    connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable', host='141.8.193.201')
+    try:
+        if await tokenManager.read_dictionary(token):
+            user_id = await tokenManager.get_user_id(token)
+            await connection.execute('''UPDATE tagme.message
+SET read = TRUE
+WHERE (conversation_id = $2 AND author_id != $1)''', user_id, conversation_id)
+            status = True
+            message = 'success'
+        else:
+            status = False
+            message = 'invalid token'
+    except:
+        message = str(sys.exc_info()[1])
+        status = False
+    finally:
+        await connection.close()
+    return status, message
+async def delete_conversation(token, conversation_id): # получение локации друзей
+    global tokenManager
+    status = True
+    message = ''
+    connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable', host='141.8.193.201')
+    try:
+        if await tokenManager.read_dictionary(token):
+            user_id = await tokenManager.get_user_id(token)
+            await connection.execute('''update tagme.message
+set deleted = true
+where conversation_id = $1''', conversation_id)
+            status = True
+            message = 'success'
+        else:
+            status = False
+            message = 'invalid token'
+    except:
+        message = str(sys.exc_info()[1])
+        status = False
+    finally:
+        await connection.close()
+    return status, message
+async def delete_message(token, conversation_id): # получение локации друзей
+    global tokenManager
+    status = True
+    message = ''
+    connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable', host='141.8.193.201')
+    try:
+        if await tokenManager.read_dictionary(token):
+            user_id = await tokenManager.get_user_id(token)
+            await connection.execute('''update tagme.message
+set deleted = true
+where id = $1''', conversation_id)
+            status = True
+            message = 'success'
+        else:
+            status = False
+            message = 'invalid token'
+    except:
+        message = str(sys.exc_info()[1])
+        status = False
+    finally:
+        await connection.close()
+    return status, message
+async def get_leaderboard(token): # получение локации друзей
+    global tokenManager
+    status = True
+    message = ''
+    connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable', host='141.8.193.201')
+    try:
+        if await tokenManager.read_dictionary(token):
+            user_id = await tokenManager.get_user_id(token)
+            myPlace = await connection.fetchval('''select place from tagme.rating where user_id = $1''', user_id)
+            records = await connection.fetch('''SELECT "user".id AS id, nickname, picture_id, place, user_score AS tags from tagme.rating
+LEFT JOIN tagme."user" ON "user".id = rating.user_id
+LEFT JOIN tagme.picture ON picture.id = "user".picture_id
+WHERE place > 0
+ORDER BY place ASC limit 10''')
+            result = {"my_place": myPlace,"result": [{"id": record['id'], "nickname": record["nickname"],
+                                  "picture_id": record['picture_id'], "place": record["place"], "tags": record["tags"]} for record in
+                                 records]}
+            status = True
+            message = result
+        else:
+            status = False
+            message = 'invalid token'
+    except:
+        message = str(sys.exc_info()[1])
+        status = False
+    finally:
+        await connection.close()
+    return status, message
+async def get_nearby_people(token): # получение локации друзей
+    global tokenManager
+    status = True
+    message = ''
+    connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable', host='141.8.193.201')
+    try:
+        if await tokenManager.read_dictionary(token):
+            user_id = await tokenManager.get_user_id(token)
+            records = await connection.fetch('''WITH target_user_location AS (
+    SELECT latitude AS target_latitude, longitude AS target_longitude
+    FROM tagme.location
+    WHERE user_id = $1
+),
+user_distances AS (SELECT u.id AS user_nearby_id,
+                          u.nickname,
+                          u.picture_id,
+                          round((6371000 * 2 * ATAN2(SQRT(
+                                                       SIN(RADIANS(l.latitude - t.target_latitude) / 2) *
+                                                       SIN(RADIANS(l.latitude - t.target_latitude) / 2) +
+                                                       COS(RADIANS(t.target_latitude)) * COS(RADIANS(l.latitude)) *
+                                                       SIN(RADIANS(l.longitude - t.target_longitude) / 2) *
+                                                       SIN(RADIANS(l.longitude - t.target_longitude) / 2)
+                                               ), SQRT(1 - (
+                              SIN(RADIANS(l.latitude - t.target_latitude) / 2) *
+                              SIN(RADIANS(l.latitude - t.target_latitude) / 2) +
+                              COS(RADIANS(t.target_latitude)) * COS(RADIANS(l.latitude)) *
+                              SIN(RADIANS(l.longitude - t.target_longitude) / 2) *
+                              SIN(RADIANS(l.longitude - t.target_longitude) / 2)
+                              ))))) AS distance_meters
+                   FROM tagme."user" u
+                            JOIN tagme.location l ON u.id = l.user_id
+                            CROSS JOIN target_user_location t
+                   where show_nearby = true)
+SELECT
+    ud.user_nearby_id AS user_id,
+    ud.nickname,
+    ud.picture_id,
+    ud.distance_meters
+FROM user_distances ud
+LEFT JOIN tagme.user_link ul ON user1_id = ud.user_nearby_id and ul.user2_id = $1 and (ul.relation = 'blocked' OR ul.relation = 'friend')
+WHERE ud.distance_meters <= 1000
+  AND ud.user_nearby_id != $1 AND ul.relation IS NULL''', user_id)
+            result = {"result": [{"user_id": record['user_id'], "nickname": record["nickname"],
+                                  "picture_id": record['picture_id'], "distance_meters": record["distance_meters"]} for record in
+                                 records]}
+            status = True
+            message = result
+        else:
+            status = False
+            message = 'invalid token'
+    except:
+        message = str(sys.exc_info()[1])
+        status = False
+    finally:
+        await connection.close()
+    return status, message
+async def update_privacy_nearby(token, enable): # получение локации друзей
+    global tokenManager
+    status = True
+    message = ''
+    connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable', host='141.8.193.201')
+    try:
+        if await tokenManager.read_dictionary(token):
+            user_id = await tokenManager.get_user_id(token)
+            if enable == True:
+                await connection.execute('''update tagme."user"
+    set show_nearby = true
+    where id = $1''', user_id)
+            else:
+                await connection.execute('''update tagme."user"
+                    set show_nearby = false
+                    where id = $1''', user_id)
+            status = True
+            message = 'success'
+        else:
+            status = False
+            message = 'invalid token'
+    except:
+        message = str(sys.exc_info()[1])
+        status = False
+    finally:
+        await connection.close()
+    return status, message
+async def update_my_data(token): # получение локации друзей
+    global tokenManager
+    status = True
+    message = ''
+    connection = await asyncpg.connect(user='vegetable', password='2kn39fjs', database='db_vegetable', host='141.8.193.201')
+    try:
+        if await tokenManager.read_dictionary(token):
+            user_id = await tokenManager.get_user_id(token)
+            user_score = await connection.fetchval('''SELECT user_score FROM tagme."user"
+LEFT JOIN tagme.rating ON user_id = $1
+WHERE "user".id = $1''', user_id)
+            result = {"user_score": user_score}
+            status = True
+            message = json.dumps(result)
+        else:
+            status = False
+            message = 'invalid token'
+    except:
+        message = str(sys.exc_info()[1])
+        status = False
+    finally:
+        await connection.close()
+    return status, message
 async def Websocket(websocket, path):
     global tokenManager
     status = True
@@ -1025,7 +1268,7 @@ async def Websocket(websocket, path):
                 status, message = await deny_request(token, user2_id)
             case "get conversations":
                 token = user_data.get('token')
-                status, message = await get_chats(token)
+                status, message = await get_conversations(token)
             case "get friend requests":
                 token = user_data.get('token')
                 status, message = await get_friend_requests(token)
@@ -1078,6 +1321,31 @@ async def Websocket(websocket, path):
                 token = user_data.get('token')
                 profile_user_id = user_data.get('user_id')
                 status, message = await load_profile(token, profile_user_id)
+            case "read conversation":
+                token = user_data.get('token')
+                conversation_id = user_data.get('conversation_id')
+                status, message = await read_conversation(token, conversation_id)
+            case "delete message":
+                token = user_data.get('token')
+                msg_id = user_data.get('msg_id')
+                status, message = await delete_message(token, msg_id)
+            case "delete conversation":
+                token = user_data.get('token')
+                conversation_id = user_data.get('conversation_id')
+                status, message = await delete_conversation(token, conversation_id)
+            case "get leaderboard":
+                token = user_data.get('token')
+                status, message = await get_leaderboard(token)
+            case "get nearby people":
+                token = user_data.get('token')
+                status, message = await get_nearby_people(token)
+            case "update privacy nearby":
+                token = user_data.get('token')
+                enable = user_data.get('enable')
+                status, message = await update_privacy_nearby(token, enable)
+            case "update my data":
+                token = user_data.get('token')
+                status, message = await update_my_data(token)
             case _:
                 status = False
                 message = "action mismatch"
